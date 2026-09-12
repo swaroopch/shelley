@@ -6,6 +6,9 @@ if [[ $# != 1 || ! -d "$1/.git" ]]; then
   exit 2
 fi
 cd "$1"
+# Match a normal developer/test environment: upstream permission-preservation
+# tests create 0640 files. The service's private state directory stays 0700.
+umask 022
 export CI=true
 uv run --no-project scripts/test-sync-custom.py
 make ui
