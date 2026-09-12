@@ -15,6 +15,17 @@
 `origin` deliberately remains the official repository for Shelley's build
 metadata. `fork` uses the exe.dev GitHub integration for pushes on this VM.
 
+## Path reference convention
+
+Keep **JSON-escaped double quotes**, not Markdown backticks, around paths
+inserted by `@` completion. This is the user's agreed preference for both
+files and folders: it clearly delimits spaces and consistently escapes quotes,
+backslashes, and unusual characters. Folder paths retain their trailing `/`.
+These are prompt-text references, not attachments, automatic reads, or a
+promise of shell-safe quoting. Do not change to backticks just for presentation.
+The implementation and tests live on `file-name-completion`; restoring `custom`
+restores this convention without any additional VM settings.
+
 ## Automatic integration (VM-side, not GitHub Actions)
 
 The VM user timer is deliberate: the connected exe.dev repository integration
