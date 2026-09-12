@@ -80,8 +80,19 @@ lobby reports an unset key as an error, first verify that it is genuinely unset
 curl -fsSL https://raw.githubusercontent.com/swaroopch/shelley/custom/scripts/exe-first-boot.sh -o /tmp/shelley-first-boot.sh
 ssh exe.dev defaults write dev.exe new.setup-script < /tmp/shelley-first-boot.sh
 ssh exe.dev defaults read dev.exe new.setup-script > /tmp/shelley-first-boot-confirmed.sh
-cmp /tmp/shelley-first-boot.sh /tmp/shelley-first-boot-confirmed.sh
+awk '{ print }' /tmp/shelley-first-boot.sh > /tmp/shelley-first-boot-normalized.sh
+awk '{ print }' /tmp/shelley-first-boot-confirmed.sh > /tmp/shelley-first-boot-confirmed-normalized.sh
+cmp /tmp/shelley-first-boot-normalized.sh /tmp/shelley-first-boot-confirmed-normalized.sh
 ```
+
+Read-back omits the final LF even when the script was written with one. The
+helper therefore compares copies with a final line terminator, while preserving
+raw backups. It does **not** ignore other whitespace, extra blank lines, CRLF
+changes, or changed commands. The same comparison recognizes an already-active
+loader without rewriting the setting. The owner confirmed activation by
+comparing the proposed and read-back loaders: only that harmless final LF
+was missing. Account configuration remains external state; re-read it when
+recovering or making further changes rather than assuming Git alone proves it.
 
 Do not overwrite an existing default to use this shortcut: review and compose
 its behavior with this loader first, preserving a protected local backup.
