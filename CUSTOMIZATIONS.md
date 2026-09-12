@@ -26,6 +26,93 @@ promise of shell-safe quoting. Do not change to backticks just for presentation.
 The implementation and tests live on `file-name-completion`; restoring `custom`
 restores this convention without any additional VM settings.
 
+## New VMs: first-boot installation
+
+**Decision:** use exe.dev's documented account default `dev.exe new.setup-script`
+with the standard exeuntu image, rather than maintain a custom image or grant
+repository write access to every VM. The hook installs the current public
+`custom` branch once, after building and testing it. It does not create another
+branch-sync writer or enable an ongoing binary-upgrade timer. Existing VMs
+still require explicit upgrade approval; first-boot installation on new VMs is
+pre-authorized by enabling this account default.
+
+The implementation is tracked here:
+
+- `scripts/exe-first-boot.sh`: small first-boot loader (under exe.dev's 10 KiB
+  limit), downloaded source is executed only after a successful HTTP fetch.
+- `scripts/provision-exe-vm.sh`: fresh-VM installer, dependency setup, canonical
+  checkout, customized build, tests, backup, and atomic binary replacement.
+- `scripts/configure-exe-defaults.sh`: owner-run account activation helper. It
+  backs up the previous value, refuses to overwrite nonempty unrelated setup,
+  and verifies the value after writing it.
+
+New VMs fetch the public fork without credentials. `origin` remains official;
+`fork` has a public fetch URL and an integration-backed push URL. A GitHub grant
+is needed only if that VM will push or take over the integration coordinator.
+No credentials, config, or conversation database are copied between VMs.
+The canonical checkout and completion marker prevent the installer from
+silently upgrading or overwriting an already-customized working VM.
+
+This setup trusts code published on `swaroopch/shelley:custom`; repository write
+access therefore also controls future provisioning. Installation needs network
+access and build time. A failed build/test leaves the existing Shelley binary
+in place and reports an error rather than pretending provisioning succeeded.
+
+### Activate the account default (owner's workstation)
+
+Git commits do **not** activate an exe.dev account setting. This VM has no
+owner SSH identity or forwarded agent, so activation must be performed from an
+authenticated workstation. No secret needs to be supplied to Shelley:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/swaroopch/shelley/custom/scripts/configure-exe-defaults.sh -o /tmp/configure-shelley-defaults.sh
+bash /tmp/configure-shelley-defaults.sh --apply
+```
+
+The helper refuses read/authentication errors and existing setup scripts. If the
+lobby reports an unset key as an error, first verify that it is genuinely unset
+(not an authentication failure). Then the documented manual activation is:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/swaroopch/shelley/custom/scripts/exe-first-boot.sh -o /tmp/shelley-first-boot.sh
+ssh exe.dev defaults write dev.exe new.setup-script < /tmp/shelley-first-boot.sh
+ssh exe.dev defaults read dev.exe new.setup-script > /tmp/shelley-first-boot-confirmed.sh
+cmp /tmp/shelley-first-boot.sh /tmp/shelley-first-boot-confirmed.sh
+```
+
+Do not overwrite an existing default to use this shortcut: review and compose
+its behavior with this loader first, preserving a protected local backup.
+The setting applies to future VMs whose image runs the exeuntu setup hook;
+it does not retrofit existing VMs or arbitrary custom images. An explicit
+per-VM setup script may override it. To try it for one new VM before changing
+the account default, pipe this loader to `ssh exe.dev new --setup-script /dev/stdin`.
+
+After creation, inspect `journalctl -u exe-setup.service`, `shelley version`,
+and the canonical checkout. The installer also keeps
+`~/.local/state/shelley-provision/provision.log`, a `status` file, and a
+`success` marker naming the installed commit. Its `tools.env` records the
+Node/pnpm build PATH; source it before later manual builds when those tools
+were installed privately. Managed Node is pinned to 24.18.0; an existing Node
+24 installation is reused. pnpm is pinned by the checked-out `ui/package.json`,
+and Go's automatic toolchain selection follows `go.mod`.
+
+A loader/network failure can be retried through `exe-setup.service`. If the
+installer already created its canonical checkout, it deliberately refuses a
+blind retry: inspect the log and use the manual recovery/upgrade procedure
+below, preserving that checkout and any work. A success marker makes subsequent
+installer invocations a no-op, not an implicit upgrade.
+
+On the owner's workstation,
+`ssh exe.dev defaults read dev.exe new.setup-script` verifies the account
+configuration. Clear the default with
+`ssh exe.dev defaults delete dev.exe new.setup-script`, or restore a previous
+script with the documented `defaults write` stdin form. Neither action changes
+already provisioned VMs.
+
+Sources: [exe.dev customization](https://exe.dev/docs/customization.md),
+[new VM options](https://exe.dev/docs/cli-new.md), and the
+[exeuntu setup service](https://github.com/boldsoftware/exeuntu/blob/main/exe-setup.service).
+
 ## Automatic integration (VM-side, not GitHub Actions)
 
 The VM user timer is deliberate: the connected exe.dev repository integration

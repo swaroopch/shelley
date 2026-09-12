@@ -11,6 +11,8 @@ cd "$1"
 umask 022
 export CI=true
 uv run --no-project scripts/test-sync-custom.py
+uv run --no-project scripts/test-provision-exe-vm.py
+uv run --no-project scripts/test-configure-exe-defaults.py
 make ui
 (
   cd ui
