@@ -113,7 +113,9 @@ previous binary is backed up under `/usr/local/lib/shelley-backups/` on this VM.
 2. Install Git, `make`, `tmux`, `uv`, Node 24, the Go version declared by
    `go.mod`, Corepack, and the Playwright Chromium OS dependencies. Install
    `uv` specifically as `~/.local/bin/uv`: the committed service has that
-   literal `ExecStart` path and adds `~/.local/bin` to `PATH`.
+   literal `ExecStart` path and adds `~/.local/bin` to `PATH`. Verify that all
+   tools are reachable with the service's committed `PATH` (inspect the unit
+   template); an interactive shell's extra paths are not inherited by the timer.
 3. Clone from official Shelley so `origin` remains official, then add the
    integration-backed fork remote and track the published branch:
 
@@ -135,7 +137,10 @@ previous binary is backed up under `/usr/local/lib/shelley-backups/` on this VM.
    ```sh
    git --version; make --version; tmux -V; ~/.local/bin/uv --version
    awk '/^go / { print "required Go " $2; exit }' go.mod; go version
-   node --version; corepack enable            # Node must be v24.x
+   node --version                            # Node must be v24.x
+   mkdir -p "$HOME/.local/bin"
+   corepack enable --install-directory "$HOME/.local/bin" pnpm
+   export PATH="$HOME/.local/bin:$PATH"
    corepack prepare "$(node -p "require('./ui/package.json').packageManager")" --activate; pnpm --version
    cd ui && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium
    cd ..
