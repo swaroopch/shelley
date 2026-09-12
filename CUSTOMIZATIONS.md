@@ -69,7 +69,10 @@ curl -fsSL https://raw.githubusercontent.com/swaroopch/shelley/custom/scripts/co
 bash /tmp/configure-shelley-defaults.sh --apply
 ```
 
-The helper refuses read/authentication errors and existing setup scripts. If the
+The helper treats the exact `(not set)` marker from a **successful** lobby read
+as an absent default, keeping that raw response in the backup. It still refuses
+read/authentication errors, unexpected nonempty output, and real setup scripts
+(including scripts that merely mention `(not set)`). If the
 lobby reports an unset key as an error, first verify that it is genuinely unset
 (not an authentication failure). Then the documented manual activation is:
 

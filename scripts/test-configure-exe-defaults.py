@@ -26,7 +26,7 @@ printf '%s\\n' "$*" >> "$CASE/ssh.calls"
 [[ "$1" == exe.dev && "$2" == defaults && "$4" == dev.exe && "$5" == new.setup-script ]]
 case "$3" in
 read)
-  if [[ -f "$CASE/fail-read" ]]; then echo 'authentication failed' >&2; exit 1; fi
+  if [[ -f "$CASE/fail-read" ]]; then printf '(not set)\\n'; echo 'authentication failed' >&2; exit 1; fi
   if [[ -f "$CASE/default" ]]; then cat "$CASE/default"; fi
   ;;
 write) cat > "$CASE/default"; touch "$CASE/written" ;;
@@ -63,6 +63,31 @@ exit 99
         self.assertEqual((self.root / "default").read_text(), LOADER)
         self.assertIn("Verified:", result.stdout)
         self.assertEqual((self.root / "ssh.calls").read_text().count("defaults write"), 1)
+
+    def test_not_set_marker_is_set_and_verified_with_raw_backup(self):
+        previous = "(not set)\n"
+        (self.root / "default").write_text(previous)
+        result = self.run_helper("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "default").read_text(), LOADER)
+        self.assertIn("Verified:", result.stdout)
+        self.assertEqual((self.root / "ssh.calls").read_text().count("defaults write"), 1)
+        backups = list((self.root / ".local/state/shelley-exe-defaults").glob("*/prior-setup.sh"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(), previous)
+
+    def test_marker_with_other_content_is_not_treated_as_unset(self):
+        for previous in (
+            '#!/bin/bash\necho "(not set)"\n',
+            "warning: an unexpected response\n(not set)\n",
+            "(not set) but not the exact marker\n",
+        ):
+            with self.subTest(previous=previous):
+                (self.root / "default").write_text(previous)
+                result = self.run_helper("--apply")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual((self.root / "default").read_text(), previous)
+                self.assertFalse((self.root / "written").exists())
 
     def test_existing_default_is_backed_up_and_not_overwritten(self):
         previous = "#!/bin/bash\necho keep-my-old-setup\n"

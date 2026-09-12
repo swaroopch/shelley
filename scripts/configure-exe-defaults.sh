@@ -35,7 +35,11 @@ if cmp -s "$backup/prior-setup.sh" "$backup/proposed-setup.sh"; then
   echo 'This first-boot default is already configured.'
   exit 0
 fi
-if [[ -s "$backup/prior-setup.sh" ]]; then
+# A successful lobby read prints "(not set)" for an absent key. Recognize
+# only that whole-output marker (apart from trailing newlines), not arbitrary
+# nonempty output or a real script that happens to mention it. Keep the raw
+# read in the backup, and never apply this rule to a failed SSH command.
+if [[ -s "$backup/prior-setup.sh" && "$(< "$backup/prior-setup.sh")" != '(not set)' ]]; then
   echo "An existing setup script is backed up at $backup/prior-setup.sh." >&2
   echo 'Refusing to overwrite it. Review and compose both setup scripts before changing the default.' >&2
   exit 2
