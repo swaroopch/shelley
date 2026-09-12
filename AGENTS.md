@@ -44,3 +44,17 @@
     entry that duplicates one of the real choices. Only keep a `default` sentinel when the
     concrete value is genuinely unknowable; even then, spell it out if you can (e.g. `Default
     (on)` for a boolean toggle).
+
+## This fork's feature integration
+
+- Read `CUSTOMIZATIONS.md` before changing branches, upgrading, or deploying.
+- Keep the canonical checkout on `custom`. Develop upstream-facing features in
+  separate worktrees based on `origin/main`; never merge `custom` into them.
+- `origin` is official Shelley; `fork` is the user's fork. The enabled feature
+  list is `.shelley-features`. The VM timer merges upstream/features into a
+  separate tested candidate and pushes `fork/custom`; it does not deploy.
+- Do not rebase or force-push `custom`, including when the generic customization
+  skill suggests rebasing. Preserve its merge history; intentionally upgrade
+  the canonical checkout with `git fetch fork` and `git merge --ff-only fork/custom`.
+- Test and build with `make build-custom`. Never replace the running binary or
+  restart the main service without explicit approval.

@@ -1,0 +1,2 @@
+# Browser regressions for enabled features (paths relative to ui/).
+e2e/file-completion.spec.ts

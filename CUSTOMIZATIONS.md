@@ -1,53 +1,100 @@
-# Local customizations
+# This fork's customization workflow
 
-## `@` filename completion
+## Branches
 
-In the chat composer, type `@` at the start of a word to search filenames in
-that conversation's working directory. New conversations and drafts use the
-currently selected directory. Search uses the existing name-only `findFiles`
-API; no file contents are fetched or attached.
+- `origin/main` is official `boldsoftware/shelley`; `fork/main` is its
+  fast-forward-only mirror on `swaroopch/shelley`.
+- `file-name-completion` is the upstream-facing feature branch. It contains only
+  the feature, tests, and [usage documentation](FILE_COMPLETION.md), not this
+  fork's maintenance scripts or deployment notes. Use it as the head of a PR
+  targeting `boldsoftware/shelley:main`.
+- `custom` is the tested integration branch: upstream plus the feature branches
+  listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
+  It preserves merge history. **Never rebase or force-push `custom`.**
 
-- Type `@readme` to fuzzy-search names, or `@"My Notes` for a query with spaces.
-  Quotes also allow punctuation in a query. Unquoted queries stop at whitespace
-  or prose punctuation such as commas and parentheses.
-- Use Up/Down to select, Enter/Tab to insert, or click a result.
-- Escape dismisses without blurring; Shift+Enter still inserts a newline.
-- Insertion replaces the token under the cursor with a double-quoted, escaped
-  absolute path, preserving surrounding text. Results resolve against the API's
-  `search_dir`, including searches rooted outside the conversation directory.
-- Searches are debounced and cancelled when the query, directory, conversation,
-  or focus changes. Errors and empty results leave normal keyboard input usable.
-- Email addresses and shell-mode input do not trigger completion.
+`origin` deliberately remains the official repository for Shelley's build
+metadata. `fork` uses the exe.dev GitHub integration for pushes on this VM.
 
-Implementation: `ui/src/utils/fileCompletion.ts`,
-`ui/src/vue/composables/fileCompletion.ts`, `MessageInput.vue`, and the working
-folder prop in `ChatInterface.vue`. No backend or database changes.
+## Automatic integration (VM-side, not GitHub Actions)
 
-## Build and verify
+The `shelley-custom-sync` systemd **user timer** checks every 15 minutes after
+its previous run finishes. It requires this VM and its GitHub repository
+integration to remain available; it does not run while the VM is stopped.
+The unit templates are in `scripts/systemd/`.
 
-Keep changes committed on `custom`. From this checkout, run `make build-custom`
-(not `make build`) so binary self-updates do not discard the customization.
+The job runs `scripts/sync-custom.py` in a separate checkout under
+`~/.local/state/shelley-sync/`. It never changes the canonical checkout,
+replaces `/usr/local/bin/shelley`, or restarts the running service.
 
-From `ui/`:
+Each run:
+
+1. Fetches upstream and the fork; reads the enabled branches from `fork/custom`.
+2. Starts a candidate at `fork/custom`, then merges upstream and enabled features.
+3. Runs integration-script tests, both UI type checks, lint, all UI unit tests,
+   a customized build, serial Go tests, and the browser regressions listed in
+   [.shelley-browser-tests](.shelley-browser-tests).
+4. Checks that the remote inputs have not changed during validation, then
+   atomically pushes the tested `custom` and fast-forward-only upstream mirror.
+
+No changes means no build. A conflict, failed test, missing feature, dirty job
+checkout, or concurrent remote change stops publication. The last tested remote
+branch remains intact. An unchanged failing input is not repeatedly rebuilt;
+fix the relevant branch, or use `--retry` when deliberately retrying a transient
+failure. Failures and skip reasons are recorded in the user journal and the
+state directory; **there is no automatic conflict resolution or deployment**.
+
+Inspect or pause the job:
 
 ```sh
-pnpm run type-check
-pnpm run type-check:vue
-pnpm run lint
-pnpm test
-pnpm exec playwright test e2e/file-completion.spec.ts
+systemctl --user status shelley-custom-sync.timer shelley-custom-sync.service
+journalctl --user -u shelley-custom-sync.service -n 100
+systemctl --user disable --now shelley-custom-sync.timer
 ```
 
-From the checkout root, after building the UI: `go test ./server -parallel 1`.
-The upstream reflection-cache test can fail in the default parallel suite;
-serial execution and the focused file-finder tests pass.
+To run a check immediately: `systemctl --user start shelley-custom-sync.service`.
+To retry unchanged failed inputs, run the unit's `ExecStart` command manually
+with `--retry` appended (inspect it with `systemctl --user cat shelley-custom-sync.service`).
 
-The preview uses a separate database and port. Disable its CLI socket so it
-cannot replace the running installation's socket. On this exe.dev VM:
+## Adding a feature
+
+Develop in a separate worktree based on official main, not on `custom`, so the
+branch does not inherit other features or fork-only maintenance. Push it to the
+fork, then add its name to `.shelley-features` on `custom` and push that change.
+Add relevant browser spec paths to `.shelley-browser-tests`. Future pushes to
+enabled features are picked up automatically without changing the manifest.
+
+Removing a manifest entry stops future merges; it does **not** undo already
+merged code. Reverts, rebased feature history, upstream squash-merges, and
+conflict resolution may need deliberate integration work. Do not open an
+upstream PR from `custom` or merge `custom` back into a feature branch.
+
+## Upgrading the installed build
+
+The canonical checkout remains `~/.config/shelley/shelley-customization` on
+`custom`. Only update it as part of an intentional upgrade:
 
 ```sh
-./bin/shelley -config /exe.dev/shelley.json -db /tmp/shelley-custom-preview.db serve -port 8010 -socket none -banner 'Preview: @ filename completion — separate history'
+git fetch origin main --tags
+git fetch fork
+git switch custom
+git merge --ff-only fork/custom
+make build-custom
 ```
 
-Run the preview in tmux. Do not replace or restart the primary installation
-without explicit approval.
+Use `make build-custom`, not `make build`, so a binary self-update cannot erase
+the customization. The generic Shelley customization skill's rebase recipe
+must not be used for this merge-based fork; use the sync job plus fast-forward
+above instead. Changes to the sync runner/validator in the canonical checkout
+also update the installed timer's maintenance code and should be reviewed.
+
+A preview must use a separate database, port, and `-socket none`. Installing a
+new binary over the primary service still requires explicit approval. The
+previous binary is backed up under `/usr/local/lib/shelley-backups/` on this VM.
+
+## Verification
+
+Run `uv run --no-project scripts/test-sync-custom.py` for isolated Git fixtures
+(no network and no sleeps). The production gate is `scripts/validate-custom.sh`;
+its only argument is the separate candidate checkout. Serial Go execution is
+intentional: the upstream reflection-cache test has failed under the default
+parallel suite on this VM.

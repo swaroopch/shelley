@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Shelley upstream and enabled features every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+AccuracySec=1min
+Unit=shelley-custom-sync.service
+
+[Install]
+WantedBy=timers.target
