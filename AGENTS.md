@@ -45,6 +45,11 @@
     concrete value is genuinely unknowable; even then, spell it out if you can (e.g. `Default
     (on)` for a boolean toggle).
 
+17. Record every fork-specific operational or architecture decision, its rationale, and its
+    recovery requirements in tracked documentation or scripts. Commit and push that record to
+    `custom` before relying on it; never leave required knowledge only in agent/private memory or
+    in VM-only configuration. Keep secrets out of Git and document their separate recovery needs.
+
 ## This fork's feature integration
 
 - Read `CUSTOMIZATIONS.md` before changing branches, upgrading, or deploying.
