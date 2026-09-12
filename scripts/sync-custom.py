@@ -313,11 +313,14 @@ def merge_candidate(
 ) -> str:
     starting_sha = str(snapshot["fork_custom"])
     git(repo, "checkout", "--detach", starting_sha)
-    targets = [("upstream/main", str(snapshot["upstream_main"]))]
-    targets.extend(
+    # Feature branches may already contain a reviewed upstream conflict
+    # resolution. Merge them first so that resolution can reach custom before
+    # attempting upstream's changes in isolation.
+    targets = [
         (f"fork/{item['branch']}", str(item["sha"]))
         for item in snapshot["features"]  # type: ignore[union-attr]
-    )
+    ]
+    targets.append(("upstream/main", str(snapshot["upstream_main"])))
     for label, sha in targets:
         merged = git(repo, "merge", "--no-ff", "--no-edit", sha, check=False)
         if merged.returncode:

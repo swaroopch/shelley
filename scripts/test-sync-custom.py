@@ -249,6 +249,35 @@ class SyncCustomTests(unittest.TestCase):
         self.assertNotEqual(retried.returncode, 0)
         self.assertIn("merge failed", retried.stderr)
 
+    def test_feature_can_carry_an_upstream_conflict_resolution(self) -> None:
+        self.git("checkout", "feature/one")
+        write(self.dev / "conflict.txt", "feature\n")
+        self.commit("feature edits shared code", "conflict.txt")
+        self.git("push", "fork", "feature/one")
+        initial = self.sync()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        previous_custom = self.remote_sha(self.fork, "custom")
+
+        self.git("checkout", "main")
+        write(self.dev / "conflict.txt", "upstream\n")
+        upstream = self.commit("upstream edits same code", "conflict.txt")
+        self.git("push", "upstream", "main")
+        blocked = self.sync()
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertEqual(self.remote_sha(self.fork, "custom"), previous_custom)
+
+        self.git("checkout", "feature/one")
+        conflict = command("git", "merge", "--no-ff", "--no-edit", "main", cwd=self.dev, check=False)
+        self.assertNotEqual(conflict.returncode, 0)
+        write(self.dev / "conflict.txt", "feature and upstream reconciled\n")
+        resolved = self.commit("reconcile upstream in feature branch", "conflict.txt")
+        self.git("push", "fork", "feature/one")
+        integrated = self.sync()
+        self.assertEqual(integrated.returncode, 0, integrated.stderr)
+        self.assertEqual(self.remote_file("custom", "conflict.txt"), "feature and upstream reconciled\n")
+        self.assert_ancestor(resolved, self.remote_sha(self.fork, "custom"))
+        self.assert_ancestor(upstream, self.remote_sha(self.fork, "custom"))
+
     def test_failed_validator_leaves_remote_unchanged(self) -> None:
         validator = self.make_validator("echo validation-broke >&2\nexit 23\n")
         custom = self.remote_sha(self.fork, "custom")

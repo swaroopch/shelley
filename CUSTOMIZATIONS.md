@@ -29,7 +29,9 @@ replaces `/usr/local/bin/shelley`, or restarts the running service.
 Each run:
 
 1. Fetches upstream and the fork; reads the enabled branches from `fork/custom`.
-2. Starts a candidate at `fork/custom`, then merges upstream and enabled features.
+2. Starts a candidate at `fork/custom`, merges enabled features in manifest
+   order, then upstream. Features go first so a reviewed upstream conflict
+   resolution on a feature branch can be incorporated before merging upstream.
 3. Runs integration-script tests, both UI type checks, lint, all UI unit tests,
    a customized build, serial Go tests, and the browser regressions listed in
    [.shelley-browser-tests](.shelley-browser-tests).
@@ -65,7 +67,9 @@ enabled features are picked up automatically without changing the manifest.
 
 Removing a manifest entry stops future merges; it does **not** undo already
 merged code. Reverts, rebased feature history, upstream squash-merges, and
-conflict resolution may need deliberate integration work. Do not open an
+conflict resolution may need deliberate integration work. Resolve upstream
+conflicts on the relevant feature branch (merge `origin/main` there), test, and
+push; the next sync can incorporate that reviewed resolution. Do not open an
 upstream PR from `custom` or merge `custom` back into a feature branch.
 
 ## Upgrading the installed build
