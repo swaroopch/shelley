@@ -51,6 +51,12 @@ git config --local user.name 'Swaroop CH'
 git config --local user.email 'swaroop@swaroopch.com'
 ```
 
+The owner also chose `swaroop@swaroopch.com` as this VM's global Git email
+in `~/.gitconfig`. To restore that default, run
+`git config --global user.email 'swaroop@swaroopch.com'`.
+Repository-local overrides still take precedence; this does not modify the
+owner's laptop or other VMs.
+
 These repository-local settings are shared by its worktrees. The first-boot
 installer sets them on new clones; reapply them when recovering a checkout.
 This applies to **both author and committer** for every new fork commit,
