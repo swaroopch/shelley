@@ -10,10 +10,14 @@ version of the before screenshot now uses the approved blurred image. Historical
 PR-draft image links point to the sanitized image commit. The private verification
 receipt and commit maps accompany the recovery bundles described below.
 
-PR #281 is external state: its owner must replace both screenshot URLs with
-those in `MOBILE_KEYBOARD_INPUT_PR.md` if GitHub API writes remain unavailable.
-The old public URL may still be served by GitHub; the branch rewrite is not a
-cache purge. No main-service deployment is part of this cleanup.
+PR #281 is external state: the GitHub integration rejected its image-only body
+update with HTTP 403, so its owner must replace both screenshot URLs with those
+in `MOBILE_KEYBOARD_INPUT_PR.md`. A fresh public clone confirmed that the original
+PNG is absent from reachable `custom` history. However, an unauthenticated request
+to the previously published image URL still returned HTTP 200 and the original
+PNG bytes after publication. The old public copy therefore remains accessible;
+this branch rewrite did not purge GitHub's retained objects/cache. No main-service
+deployment or binary modification was performed.
 
 The owner explicitly authorized a one-time exception to the no-rewrite rule
 for `custom` to replace the historical, unblurred **before** screenshot with the
