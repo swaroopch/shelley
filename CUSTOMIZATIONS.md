@@ -8,6 +8,12 @@
   the feature, tests, and [usage documentation](FILE_COMPLETION.md), not this
   fork's maintenance scripts or deployment notes. Use it as the head of a PR
   targeting `boldsoftware/shelley:main`.
+  The prepared PR description, including an implementation-independent
+  recreation prompt, is tracked in [FILE_COMPLETION_PR.md](FILE_COMPLETION_PR.md).
+  The VM's GitHub integration permits Git pushes but rejects PR-creation API
+  POSTs as read-only (HTTP 403). Until an owner submits it through GitHub's
+  compare page or an authorized local CLI, this is a draft, not an open PR.
+  Keep this submission record on `custom`, not on the upstream feature branch.
 - `custom` is the tested integration branch: upstream plus the feature branches
   listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
   It preserves merge history. **Never rebase or force-push `custom`.**
