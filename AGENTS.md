@@ -71,3 +71,10 @@
   automated merge commits. Inspect raw identities and the complete commit
   message before pushing; a correct `user.email` alone is not sufficient.
   Preserve historical `custom` and upstream commit identities (no history rewrite).
+- Follow Conventional Commits 1.0.0 (https://www.conventionalcommits.org/en/v1.0.0/)
+  for new commit subjects and PR titles: `type(optional-scope): description`
+  (use `!` / `BREAKING CHANGE:` only for actual breaking changes). PR descriptions
+  start with the same conventional header, a blank line, and an explanatory body
+  with applicable screenshots, recreation prompt, validation, and footers.
+  Automated integration merges use `chore(sync): merge <source>`.
+  Preserve published `custom` history rather than rewriting old message formats.

@@ -223,6 +223,11 @@ class SyncCustomTests(unittest.TestCase):
         self.assertEqual(identities, [
             "Swaroop CH <swaroop@swaroopch.com>|Swaroop CH <swaroop@swaroopch.com>"
         ])
+        subjects = command(
+            "git", "--git-dir", self.fork, "log", "--first-parent",
+            "--format=%s", f"{before}..custom",
+        ).stdout.splitlines()
+        self.assertEqual(subjects, ["chore(sync): merge fork/feature/one"])
         # Existing/upstream contributors are not relabeled by integration.
         author = command(
             "git", "--git-dir", self.fork, "show", "-s", "--format=%ae", "main",

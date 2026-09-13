@@ -1,3 +1,5 @@
+feat(ui): add file and folder name completion to the chat composer
+
 ## Summary
 
 Add `@` file and folder name completion to the chat composer, making it easier to reference local paths without copying them from a terminal or file browser.

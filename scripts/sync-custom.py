@@ -333,7 +333,9 @@ def merge_candidate(
     ]
     targets.append(("upstream/main", str(snapshot["upstream_main"])))
     for label, sha in targets:
-        merged = git(repo, "merge", "--no-ff", "--no-edit", sha, check=False)
+        merged = git(
+            repo, "merge", "--no-ff", "-m", f"chore(sync): merge {label}", sha, check=False,
+        )
         if merged.returncode:
             output = "\n".join(part.strip() for part in (merged.stdout, merged.stderr) if part.strip())
             recovery_error = restore_after_merge_failure(repo, starting_sha)

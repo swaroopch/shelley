@@ -115,6 +115,31 @@ record and fast-forwarding the canonical checkout to the corrected runner,
 restart `shelley-custom-sync.timer` and deliberately run the sync service. This
 updates source/automation, not the deployed binary or main service.
 
+## Commit and PR message convention
+
+Follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
+for new commit subjects and PR titles: `type(optional-scope): description`.
+Use `feat` for features, `fix` for bug fixes, and descriptive types such as
+`docs`, `test`, or `chore` for other changes. Only use `!` or a
+`BREAKING CHANGE:` footer when the change really is breaking.
+
+For PR descriptions, the owner requests the same conventional header followed
+by a blank line and an explanatory body. Keep summary, screenshots, recreation
+prompt, validation, and any applicable footers; the convention does not require
+turning each paragraph into another commit subject. The tracked PR drafts use
+this format. A published PR needs a separate authorized update; changing these
+drafts does not change its GitHub title or body.
+
+Automated merges use `chore(sync): merge <source>`, with a regression test for
+the generated subject. Preserve upstream messages and existing `custom` history.
+The pending keyboard PR's single feature commit is corrected from
+`d84cbc232ae6b4a971ed8070381a0d0c3efeb7d1` to
+`d1833844b318aa8db427bc43c53aae5a9284a334`, with subject
+`fix(ui): keep the Android chat input above the software keyboard`. This changes
+only the message; source tree, parents, dates, and owner email are preserved.
+Publish only to `mobile-keyboard-input` with a lease against the recorded old
+tip. No binary deployment is needed for message-format or identity maintenance.
+
 ## Path reference convention
 
 Keep **JSON-escaped double quotes**, not Markdown backticks, around paths

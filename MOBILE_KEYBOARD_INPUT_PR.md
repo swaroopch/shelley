@@ -1,3 +1,5 @@
+fix(ui): keep the Android chat input above the software keyboard
+
 ## Summary
 
 Keep the chat input visible above Android Chrome's software keyboard by adding `interactive-widget=resizes-content` to the page's viewport policy.
