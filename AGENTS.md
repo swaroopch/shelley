@@ -78,7 +78,6 @@
   with applicable screenshots, recreation prompt, validation, and footers.
   Automated integration merges use `chore(sync): merge <source>`.
   Preserve published `custom` history rather than rewriting old message formats.
-- One-time exception: the owner explicitly approved rewriting only `custom`'s
-  historical PR screenshot as described in `HISTORY_REDACTION.md`. Preserve code
-  and topology, use the exact remote-tip lease, keep backups private, realign
-  stale clones, and resume the normal no-rewrite policy after the cleanup.
+- The one-time screenshot-history redaction in `HISTORY_REDACTION.md` is
+  completed and its exception is closed. Keep private backups private; never
+  merge stale, pre-redaction `custom` history back into the published branch.

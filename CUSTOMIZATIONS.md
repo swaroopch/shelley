@@ -37,10 +37,10 @@
   owner submission through the pre-filled GitHub compare page.
 - `custom` is the tested integration branch: upstream plus the feature branches
   listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
-  It preserves merge history. **Never rebase or force-push `custom`**, except
-  for the single owner-approved screenshot cleanup in
-  [HISTORY_REDACTION.md](HISTORY_REDACTION.md). That procedure preserves topology
-  and code while replacing the historical image; the exception ends afterward.
+  It preserves merge history. **Never rebase or force-push `custom`.** The
+  completed, one-time screenshot cleanup is recorded in
+  [HISTORY_REDACTION.md](HISTORY_REDACTION.md); it is not continuing permission
+  to rewrite this branch. Stale clones must realign, not merge old history back.
 
 `origin` deliberately remains the official repository for Shelley's build
 metadata. `fork` uses the exe.dev GitHub integration for pushes on this VM.

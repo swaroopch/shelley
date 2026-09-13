@@ -1,5 +1,20 @@
 # One-time PR screenshot history redaction
 
+**Status: completed in this sanitized history; the one-time rewrite exception is
+closed.** The normal no-rewrite rule applies to all future operations.
+
+The redaction checked 18 commits, replaced 12 commit objects without pruning any
+commits or changing merge-parent order, and preserved all feature commits,
+application code, and original author/committer metadata. Every reachable
+version of the before screenshot now uses the approved blurred image. Historical
+PR-draft image links point to the sanitized image commit. The private verification
+receipt and commit maps accompany the recovery bundles described below.
+
+PR #281 is external state: its owner must replace both screenshot URLs with
+those in `MOBILE_KEYBOARD_INPUT_PR.md` if GitHub API writes remain unavailable.
+The old public URL may still be served by GitHub; the branch rewrite is not a
+cache purge. No main-service deployment is part of this cleanup.
+
 The owner explicitly authorized a one-time exception to the no-rewrite rule
 for `custom` to replace the historical, unblurred **before** screenshot with the
 blurred image already displayed in upstream PR #281. The feature branches never
