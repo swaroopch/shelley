@@ -202,7 +202,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn("<https://github.com/swaroopch/shelley.git>", commands)
         self.assertIn("<https://github.int.exe.xyz/swaroopch/shelley.git>", commands)
         self.assertIn("<config> <--local> <user.name> <Swaroop CH>", commands)
-        self.assertIn("<config> <--local> <user.email> <42988+swaroopch@users.noreply.github.com>", commands)
+        self.assertIn("<config> <--local> <user.email> <swaroop@swaroopch.com>", commands)
         self.assertIn("node <-p> <require(process.argv[1]).packageManager>", commands)
         self.assertIn("make <-C>", commands)
         self.assertIn("<build-custom>", commands)

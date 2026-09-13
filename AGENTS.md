@@ -64,6 +64,6 @@
 - Test and build with `make build-custom`. Never replace the running binary or
   restart the main service without explicit approval.
 - Use this fork's repository-local Git identity (`Swaroop CH`,
-  `42988+swaroopch@users.noreply.github.com`). Do not override author/committer
+  `swaroop@swaroopch.com`). Do not override author/committer
   identity with Shelley or add an unresolvable Shelley co-author trailer.
   Disclose AI assistance in plain prose. Never accept or sign a CLA for the owner.

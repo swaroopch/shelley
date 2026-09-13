@@ -38,16 +38,17 @@ metadata. `fork` uses the exe.dev GitHub integration for pushes on this VM.
 
 ## Git identity and CLA attribution
 
-Use the owner's GitHub-linked identity for this fork's commits:
+Use the owner's explicitly requested identity for this fork's commits:
 
 ```sh
 git config --local user.name 'Swaroop CH'
-git config --local user.email '42988+swaroopch@users.noreply.github.com'
+git config --local user.email 'swaroop@swaroopch.com'
 ```
 
 These repository-local settings are shared by its worktrees. The first-boot
 installer sets them on new clones; reapply them when recovering a checkout.
-The numeric GitHub account ID and login were verified from the public profile.
+The owner explicitly prefers this address over GitHub's no-reply address.
+Do not substitute another address; GitHub email verification belongs to the owner.
 Do not override this identity with `Shelley` or append a fictitious Shelley
 `Co-authored-by` identity. Acknowledge AI assistance in ordinary commit prose.
 This agent environment can inject a Shelley co-author trailer into ordinary
@@ -63,14 +64,17 @@ the three feature commits with the identity above, retaining every tree and
 upstream parent, removing the unresolvable co-author trailers, and preserving
 AI-assistance disclosure in prose:
 
-| Original commit | Corrected commit |
-| --- | --- |
-| `76d6a62` | `8078c46` |
-| `2b3395e` | `dc8fbc3` |
-| `be3cade` | `058df5e` |
+| Original commit | Initial no-reply correction | Owner-email correction |
+| --- | --- | --- |
+| `76d6a62` | `8078c46` | `3070a52` |
+| `2b3395e` | `dc8fbc3` | `9a37f11` |
+| `be3cade` | `058df5e` | `1cdbd04` |
 
-Publish this correction only to `file-name-completion`, using an explicit
-`--force-with-lease=refs/heads/file-name-completion:be3cade10faa0478e51dc120788c85a647135d5a`.
+The initial correction used a GitHub no-reply address. At the owner's request,
+the second correction changes both author and committer emails to
+`swaroop@swaroopch.com`, again preserving every source tree and upstream parent.
+Publish the owner-email correction only to `file-name-completion`, using an explicit
+`--force-with-lease=refs/heads/file-name-completion:058df5e30bed7c6784ad125606224f9a4468835d`.
 Never force-push or rewrite `custom`. The original commits remain recoverable
 from its preserved integration history. Subsequent integration can merge the
 corrected feature history normally; verify that this introduces no source diff.
