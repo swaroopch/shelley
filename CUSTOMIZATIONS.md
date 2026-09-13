@@ -29,6 +29,12 @@
   `make build-custom` and `bin/shelley -predictable-only -db /tmp/shelley-keyboard-preview.db serve -port 8012 -socket none`
   (choose a fresh DB path if that path already exists). Integration and
   deployment remain separate steps; do not infer installation from a Git merge.
+  Its upstream PR draft, recreation prompt, and before/after screenshots are
+  recorded in [MOBILE_KEYBOARD_INPUT_PR.md](MOBILE_KEYBOARD_INPUT_PR.md). The
+  screenshots are cropped to exclude private conversation content and hosted
+  on `custom` so they do not add binaries to the upstream feature diff. The
+  PR-creation API still rejects POSTs as read-only (HTTP 403); this draft awaits
+  owner submission through the pre-filled GitHub compare page.
 - `custom` is the tested integration branch: upstream plus the feature branches
   listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
   It preserves merge history. **Never rebase or force-push `custom`.**
