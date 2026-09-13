@@ -11,8 +11,8 @@
   The prepared PR description, including an implementation-independent
   recreation prompt, is tracked in [FILE_COMPLETION_PR.md](FILE_COMPLETION_PR.md).
   The VM's GitHub integration permits Git pushes but rejects PR-creation API
-  POSTs as read-only (HTTP 403). Until an owner submits it through GitHub's
-  compare page or an authorized local CLI, this is a draft, not an open PR.
+  POSTs as read-only (HTTP 403). The owner submitted the feature as
+  [upstream PR #280](https://github.com/boldsoftware/shelley/pull/280).
   Keep this submission record on `custom`, not on the upstream feature branch.
 - `mobile-keyboard-input` is a separate upstream-based branch for the Android
   keyboard covering the composer. It opts into native layout-viewport resizing
@@ -35,6 +35,48 @@
 
 `origin` deliberately remains the official repository for Shelley's build
 metadata. `fork` uses the exe.dev GitHub integration for pushes on this VM.
+
+## Git identity and CLA attribution
+
+Use the owner's GitHub-linked identity for this fork's commits:
+
+```sh
+git config --local user.name 'Swaroop CH'
+git config --local user.email '42988+swaroopch@users.noreply.github.com'
+```
+
+These repository-local settings are shared by its worktrees. The first-boot
+installer sets them on new clones; reapply them when recovering a checkout.
+The numeric GitHub account ID and login were verified from the public profile.
+Do not override this identity with `Shelley` or append a fictitious Shelley
+`Co-authored-by` identity. Acknowledge AI assistance in ordinary commit prose.
+This agent environment can inject a Shelley co-author trailer into ordinary
+commits even when the author config is correct. Inspect the final commit
+metadata before publishing upstream; if needed, recreate the unpublished
+commit with `git commit-tree`, preserving its tree and parents but correcting
+its message/identity. Repo-local config alone does not prevent injected trailers.
+CLA acceptance/signing is the owner's action, not an agent's.
+
+PR #280's CLA bot could not resolve the original `shelley@localhost` author
+and `shelley@exe.dev` co-author addresses. The metadata-only correction recreates
+the three feature commits with the identity above, retaining every tree and
+upstream parent, removing the unresolvable co-author trailers, and preserving
+AI-assistance disclosure in prose:
+
+| Original commit | Corrected commit |
+| --- | --- |
+| `76d6a62` | `8078c46` |
+| `2b3395e` | `dc8fbc3` |
+| `be3cade` | `058df5e` |
+
+Publish this correction only to `file-name-completion`, using an explicit
+`--force-with-lease=refs/heads/file-name-completion:be3cade10faa0478e51dc120788c85a647135d5a`.
+Never force-push or rewrite `custom`. The original commits remain recoverable
+from its preserved integration history. Subsequent integration can merge the
+corrected feature history normally; verify that this introduces no source diff.
+If the branch has moved, stop and inspect rather than weakening the lease or
+overwriting another contributor's work. A byte-identical tree does not imply
+CLA acceptance: inspect the PR bot's new result after pushing.
 
 ## Path reference convention
 

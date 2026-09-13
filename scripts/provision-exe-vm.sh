@@ -90,6 +90,9 @@ git -C "$checkout" remote add fork "$fork_fetch"
 git -C "$checkout" remote set-url --push fork "$fork_push"
 git -C "$checkout" fetch fork --tags
 git -C "$checkout" switch --create custom --track fork/custom
+# GitHub-linked owner identity: AI assistance belongs in prose, not CLA trailers.
+git -C "$checkout" config --local user.name 'Swaroop CH'
+git -C "$checkout" config --local user.email '42988+swaroopch@users.noreply.github.com'
 head_commit="$(git -C "$checkout" rev-parse HEAD)"
 remote_commit="$(git -C "$checkout" rev-parse refs/remotes/fork/custom)"
 [[ "$head_commit" == "$remote_commit" ]] || { echo 'custom checkout is not the fetched fork/custom head' >&2; exit 1; }
