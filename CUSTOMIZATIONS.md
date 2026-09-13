@@ -18,16 +18,17 @@
   keyboard covering the composer. It opts into native layout-viewport resizing
   instead of adding JS keyboard-height guesses or a second resize mechanism.
   Its implementation, regression tests, and physical-device checklist live on
-  that branch in `MOBILE_KEYBOARD_INPUT.md`. Browser policy/layout checks,
-  desktop alignment checks, UI checks, and server tests pass, but a real Android
-  keyboard check is still required before deployment. It is deliberately **not
-  yet enabled** in `.shelley-features` and has not replaced the main binary.
+  that branch in `MOBILE_KEYBOARD_INPUT.md`. The owner confirmed on Android
+  Chrome that the keyboard leaves the full input visible and approved the fix.
+  It is enabled in `.shelley-features`; the integration gate covers keyboard
+  viewport policy/layout, desktop composer alignment, and file completion
+  together. New-VM first-boot builds consume the tested integration branch.
+  Updating the existing main service still requires separate deployment approval.
   A predictable-only preview runs in tmux `shelley-keyboard-preview` on port
   8012 with a separate temporary database. Recreate it from this branch using
   `make build-custom` and `bin/shelley -predictable-only -db /tmp/shelley-keyboard-preview.db serve -port 8012 -socket none`
-  (choose a fresh DB path if that path already exists). After owner approval,
-  add the branch to the feature manifest and its browser spec to the browser
-  gate; integration and deployment remain separate steps.
+  (choose a fresh DB path if that path already exists). Integration and
+  deployment remain separate steps; do not infer installation from a Git merge.
 - `custom` is the tested integration branch: upstream plus the feature branches
   listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
   It preserves merge history. **Never rebase or force-push `custom`.**
