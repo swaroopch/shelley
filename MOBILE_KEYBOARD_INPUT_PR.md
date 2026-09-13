@@ -14,7 +14,7 @@ This PR contains only the keyboard fix, regression tests, and documentation. It 
 | --- | --- |
 | <img src="https://raw.githubusercontent.com/swaroopch/shelley/bc9aff00b23918528e490a712819fd48e0679fcc/docs/pr-assets/mobile-keyboard-before.png" alt="Before: only the top edge of the text field is visible above the Android keyboard" width="300"> | <img src="https://raw.githubusercontent.com/swaroopch/shelley/bc9aff00b23918528e490a712819fd48e0679fcc/docs/pr-assets/mobile-keyboard-after.png" alt="After: the full Hello World text field is visible above the Android keyboard" width="300"> |
 
-Screenshots are cropped to the composer and keyboard to omit private conversation details. The captures use different themes. Image assets live in the fork, not in this PR's code diff.
+Screenshots are cropped to the composer and keyboard to omit private conversation details. The hostname in the before image is blurred. The captures use different themes. Image assets live in the fork, not in this PR's code diff.
 
 ## Recreation prompt
 
