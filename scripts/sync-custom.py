@@ -17,8 +17,8 @@ from typing import NoReturn, TextIO
 
 
 OWNER_MARKER = "shelley-sync-custom-state-v1\n"
-BOT_NAME = "Shelley integration bot"
-BOT_EMAIL = "shelley-integration-bot@localhost"
+COMMIT_NAME = "Swaroop CH"
+COMMIT_EMAIL = "swaroop@swaroopch.com"
 
 
 class SyncError(RuntimeError):
@@ -40,10 +40,12 @@ def run(
     *,
     cwd: Path | None = None,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
         cwd=cwd,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -56,7 +58,16 @@ def run(
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return run(["git", *args], cwd=repo, check=check)
+    # Git's environment overrides repository config. Set both identities for
+    # Git only; do not leak them into the validator or its test repositories.
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": COMMIT_NAME,
+        "GIT_AUTHOR_EMAIL": COMMIT_EMAIL,
+        "GIT_COMMITTER_NAME": COMMIT_NAME,
+        "GIT_COMMITTER_EMAIL": COMMIT_EMAIL,
+    }
+    return run(["git", *args], cwd=repo, check=check, env=env)
 
 
 def atomic_json(path: Path, value: dict[str, object]) -> None:
@@ -168,8 +179,8 @@ def verify_remote(repo: Path, name: str, expected: str) -> None:
 
 
 def configure_repo(repo: Path) -> None:
-    git(repo, "config", "--local", "user.name", BOT_NAME)
-    git(repo, "config", "--local", "user.email", BOT_EMAIL)
+    git(repo, "config", "--local", "user.name", COMMIT_NAME)
+    git(repo, "config", "--local", "user.email", COMMIT_EMAIL)
     git(repo, "config", "--local", "commit.gpgSign", "false")
 
 

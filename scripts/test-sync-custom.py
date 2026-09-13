@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("sync-custom.py").resolve()
@@ -201,6 +202,36 @@ class SyncCustomTests(unittest.TestCase):
 
         self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), canonical_head)
         self.assertEqual(self.git("status", "--porcelain=v1").stdout, canonical_status)
+
+    def test_merge_identity_uses_owner_email_even_with_inherited_overrides(self) -> None:
+        before = self.remote_sha(self.fork, "custom")
+        validator = self.make_validator(
+            'test "$GIT_AUTHOR_EMAIL" = inherited@example.invalid\n'
+        )
+        with patch.dict(os.environ, {
+            "GIT_AUTHOR_NAME": "Inherited Author",
+            "GIT_AUTHOR_EMAIL": "inherited@example.invalid",
+            "GIT_COMMITTER_NAME": "Inherited Committer",
+            "GIT_COMMITTER_EMAIL": "committer@example.invalid",
+        }):
+            result = self.sync(validator=validator)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        identities = command(
+            "git", "--git-dir", self.fork, "log", "--first-parent",
+            "--format=%an <%ae>|%cn <%ce>", f"{before}..custom",
+        ).stdout.splitlines()
+        self.assertEqual(identities, [
+            "Swaroop CH <swaroop@swaroopch.com>|Swaroop CH <swaroop@swaroopch.com>"
+        ])
+        # Existing/upstream contributors are not relabeled by integration.
+        author = command(
+            "git", "--git-dir", self.fork, "show", "-s", "--format=%ae", "main",
+        ).stdout.strip()
+        self.assertEqual(author, "test@example.invalid")
+        self.assertEqual(
+            self.git("config", "user.email", cwd=self.state / "workspace").stdout.strip(),
+            "swaroop@swaroopch.com",
+        )
 
     def test_missing_feature_is_suppressed_until_inputs_change(self) -> None:
         before = self.update_custom_manifest("feature/missing\n")

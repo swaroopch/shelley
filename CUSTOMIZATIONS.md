@@ -53,6 +53,15 @@ git config --local user.email 'swaroop@swaroopch.com'
 
 These repository-local settings are shared by its worktrees. The first-boot
 installer sets them on new clones; reapply them when recovering a checkout.
+This applies to **both author and committer** for every new fork commit,
+including maintenance, PR assets, and automated integration merges. The sync
+runner configures its independent workspace with this identity and explicitly
+sets Git's author/committer environment for its Git subprocesses so inherited
+variables cannot silently restore a bot identity. Validator subprocesses keep
+their own environment; fixture/upstream authors must not be relabeled.
+Inspect raw `%an <%ae>` / `%cn <%ce>` and the complete message before publishing,
+not just the local `user.email` setting. The identity regression test exercises
+conflicting inherited author and committer settings.
 The owner explicitly prefers this address over GitHub's no-reply address.
 Do not substitute another address; GitHub email verification belongs to the owner.
 Do not override this identity with `Shelley` or append a fictitious Shelley
@@ -87,6 +96,24 @@ corrected feature history normally; verify that this introduces no source diff.
 If the branch has moved, stop and inspect rather than weakening the lease or
 overwriting another contributor's work. A byte-identical tree does not imply
 CLA acceptance: inspect the PR bot's new result after pushing.
+
+The same metadata-only correction applies to `mobile-keyboard-input`:
+`7535f996d7364b204913c52a4b555fd79dcd356e` becomes
+`d84cbc232ae6b4a971ed8070381a0d0c3efeb7d1`. Its tree, parent, and original dates
+are unchanged; both identities use the owner's email and AI assistance is
+acknowledged in prose instead of a fictitious co-author trailer. Publish only
+with an explicit lease against that original feature tip. Integration may then
+merge the corrected feature histories normally, with no application-code diff.
+
+Previously published `custom` commits retain their original raw metadata. This
+is an explicit consequence of preserving its append-only history, not a claim
+that every historical email was changed. Never rewrite upstream contributors
+or force-push `custom` to repair attribution. The old feature objects remain
+recoverable through `custom`, including the hashes used by deployed binaries.
+During identity maintenance, pause the sync timer/service; after publishing the
+record and fast-forwarding the canonical checkout to the corrected runner,
+restart `shelley-custom-sync.timer` and deliberately run the sync service. This
+updates source/automation, not the deployed binary or main service.
 
 ## Path reference convention
 

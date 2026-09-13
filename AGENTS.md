@@ -67,3 +67,7 @@
   `swaroop@swaroopch.com`). Do not override author/committer
   identity with Shelley or add an unresolvable Shelley co-author trailer.
   Disclose AI assistance in plain prose. Never accept or sign a CLA for the owner.
+  This applies to both author and committer on new feature, maintenance, and
+  automated merge commits. Inspect raw identities and the complete commit
+  message before pushing; a correct `user.email` alone is not sufficient.
+  Preserve historical `custom` and upstream commit identities (no history rewrite).
