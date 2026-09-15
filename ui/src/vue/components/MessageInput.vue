@@ -865,6 +865,16 @@ const canSubmit = computed(
 );
 const isDraggingOver = computed(() => dragCounter.value > 0);
 const isShellMode = computed(() => message.value.trimStart().startsWith("!"));
+const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
+const preferCompactAndSend = computed(
+  () =>
+    canCompact.value &&
+    hasQueueHandler.value &&
+    !isCommand.value &&
+    props.compactSendLevel !== "" &&
+    sendSelectedLevel.value !== props.compactSendLevel,
+);
+
 // --- @ filename autocomplete --------------------------------------------
 const fileMenuId = useId();
 const fileMenuRef = ref<HTMLDivElement | null>(null);
@@ -914,15 +924,6 @@ watch(fileSelected, async () => {
   fileMenuRef.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
 });
 
-const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
-const preferCompactAndSend = computed(
-  () =>
-    canCompact.value &&
-    hasQueueHandler.value &&
-    !isCommand.value &&
-    props.compactSendLevel !== "" &&
-    sendSelectedLevel.value !== props.compactSendLevel,
-);
 const slashQuery = computed(() => {
   const match = message.value.match(/^\/[a-zA-Z0-9_-]*$/);
   return match ? match[0].slice(1).toLowerCase() : null;
