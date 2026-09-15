@@ -181,6 +181,23 @@ and the private bundle. Restore or fix a feature only with a new explicit lease;
 never use the bundle to reintroduce pre-redaction `custom` history. Inspect PR
 bot results after pushing; CLA acceptance and maintainer approval are separate.
 
+Results: PR #280 is rebased to `3258206121994820c4dc563af853c2541d837bce`
+(three conventional feature commits), and PR #281 to
+`a8721129b130faa5dd78ebdccf3b0231dcaabd76` (one conventional fix commit).
+Both upstream `verification/cla-signed` statuses returned `success` after the
+atomic lease-protected push. PR #280 passed 60 UI unit-test files and 28 browser
+checks; PR #281 passed 57 UI unit-test files and five browser checks. Both passed
+type checks, lint, customized builds, and serial server tests.
+
+The automatic `custom` merge of old and rebased completion history duplicated
+one declaration block in `MessageInput.vue`; its validator caught the compile
+error and prevented publication. An append-only integration merge resolves the
+artifact by using the tested feature's composer verbatim (the only net source
+change from pre-rebase `custom` is declaration ordering), followed by the
+keyboard branch merge and the full combined validation gate. Future syncs must
+start from this reviewed integration, not publish the failed candidate. Neither
+this merge nor the PR rebase installs a binary or updates the canonical checkout.
+
 ## Path reference convention
 
 Keep **JSON-escaped double quotes**, not Markdown backticks, around paths
