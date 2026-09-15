@@ -149,6 +149,38 @@ only the message; source tree, parents, dates, and owner email are preserved.
 Publish only to `mobile-keyboard-input` with a lease against the recorded old
 tip. No binary deployment is needed for message-format or identity maintenance.
 
+## Maintainer-requested PR rebases
+
+The owner approved rebasing PRs #280 and #281 onto upstream commit
+`479414bf8807871196cacd0f10d8a2d729951ad3` to refresh their CLA checks, following
+the maintainer's recommendation. This upstream commit includes the maintainer's
+addition of `swaroopch` to `.clabot`; the fork does not add itself or accept a CLA.
+A successful bot check must be observed separately from a successful Git push.
+
+Only `file-name-completion` and `mobile-keyboard-input` are rebased. Replay the
+feature patches without old upstream merge commits, preserve reviewed merge
+resolutions by comparing with a clean merge of each old feature tip and the new
+upstream, and keep all feature authors/committers at the owner identity. Rewritten
+feature subjects follow Conventional Commits. Retain prior bug fixes, double-quoted
+path insertion, and the upstream recording UI. Never merge `custom` into a PR.
+
+Before publishing, pause the sync timer/service, save a private Git bundle and
+remote-ref snapshot under `~/.local/state/shelley-pr-rebases/`, and rerun both UI
+type checks, lint, unit tests, `make build-custom`, serial server tests, and the
+feature's browser regressions. Publish both feature refs atomically with explicit
+leases against the reviewed remote tips:
+
+- PR #280: `b65b35e5b8bbdb519e9a028966ba2bceea7da500`.
+- PR #281: `d1833844b318aa8db427bc43c53aae5a9284a334`.
+
+If either remote moves, stop rather than replacing the lease. Keep `custom`
+append-only; after feature publication, resume its normal tested integration
+process. Do not update the canonical checkout or deploy as part of a PR rebase.
+The original feature commits remain available in preserved `custom` ancestry
+and the private bundle. Restore or fix a feature only with a new explicit lease;
+never use the bundle to reintroduce pre-redaction `custom` history. Inspect PR
+bot results after pushing; CLA acceptance and maintainer approval are separate.
+
 ## Path reference convention
 
 Keep **JSON-escaped double quotes**, not Markdown backticks, around paths
