@@ -5,7 +5,7 @@ Documentation=https://github.com/swaroopch/shelley/blob/custom/CUSTOMIZATIONS.md
 [Service]
 Type=oneshot
 WorkingDirectory=%h/.config/shelley/shelley-customization
-Environment="PATH=%h/.local/bin:%h/.local/npm/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=%h/.local/share/shelley-provision/pnpm/node_modules/.bin:%h/.local/share/shelley-provision/node/bin:%h/.local/bin:%h/.local/npm/bin:/usr/local/bin:/usr/bin:/bin"
 Environment=GIT_TERMINAL_PROMPT=0
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=%h/.local/bin/uv run --no-project %h/.config/shelley/shelley-customization/scripts/sync-custom.py --upstream https://github.com/boldsoftware/shelley.git --fork https://github.int.exe.xyz/swaroopch/shelley.git --state %h/.local/state/shelley-sync --validate %h/.config/shelley/shelley-customization/scripts/validate-custom.sh

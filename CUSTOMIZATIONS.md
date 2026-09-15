@@ -275,6 +275,18 @@ available; it does not run while the VM is stopped. The unit files, local state,
 caches, and journal are VM-only. Losing the VM stops automation but does not
 lose published branch history. The unit templates are in `scripts/systemd/`.
 
+The sync service PATH puts the first-boot provisioner's private pnpm and Node
+installations ahead of user-local tools. This lets provisioned VMs reuse their
+pinned build tools without replacing an owner's unrelated Node installation
+(for example, Node 22 in `~/.local/bin`). On recovery, restore those tools with
+the provisioner's documented versions, or install Node 24 and the repository's
+pinned pnpm in the remaining service PATH. Verify versions using that exact
+PATH before starting the job. If `uv` is already installed at
+`/usr/local/bin/uv`, satisfy the unit's literal executable path with
+`ln -s /usr/local/bin/uv ~/.local/bin/uv` (only when the latter is absent).
+Install Playwright's Chromium OS dependencies before the first validation;
+the validator downloads the browser into its rebuildable user cache.
+
 The job runs `scripts/sync-custom.py` in a separate checkout under
 `~/.local/state/shelley-sync/`. It never changes the canonical checkout,
 replaces `/usr/local/bin/shelley`, or restarts the running service.
