@@ -988,6 +988,7 @@ const diffCommentText = ref("");
 // tree can open the view without prop drilling).
 const imageCommentTarget = useImageCommentTarget();
 const agentWorking = ref(false);
+const resumingInterrupted = ref(false);
 const cancelling = ref(false);
 const contextWindowSize = ref(0);
 const toolProgress = ref<Record<string, ToolProgress>>({});
@@ -1494,6 +1495,14 @@ const isDistilling = computed(() => {
     }
   }
   return inProgress;
+});
+
+const conversationInterrupted = computed(() => {
+  const conversation = props.currentConversation;
+  return !!conversation?.turn_interrupted && !conversation.parent_conversation_id && !agentWorking.value;
+});
+watch(conversationInterrupted, (interrupted) => {
+  if (!interrupted) resumingInterrupted.value = false;
 });
 
 const selectedModelInfo = computed(() => models.value.find((m) => m.id === selectedModel.value));
@@ -3135,6 +3144,23 @@ async function sendMessage(message: string) {
   }
 }
 
+async function handleResumeInterrupted() {
+  const conversationId = props.conversationId;
+  if (!conversationId || resumingInterrupted.value || !conversationInterrupted.value) return;
+  try {
+    resumingInterrupted.value = true;
+    error.value = null;
+    const status = await api.resumeConversation(conversationId);
+    if (status !== "resuming") resumingInterrupted.value = false;
+  } catch (err) {
+    console.error("Failed to resume interrupted conversation:", err);
+    resumingInterrupted.value = false;
+    if (props.conversationId === conversationId) {
+      error.value = err instanceof Error ? err.message : "Failed to resume conversation";
+    }
+  }
+}
+
 async function handleCancel() {
   if (!props.conversationId || cancelling.value) return;
   const queued = queuedGhosts.value;
@@ -3460,19 +3486,24 @@ const autoQueue = computed(() => isDistilling.value && !!props.conversationId);
 const showStatusContent = computed(
   () =>
     !isMobile.value ||
+    conversationInterrupted.value ||
     !props.conversationId ||
     props.currentConversation?.is_draft ||
     props.currentConversation?.archived,
 );
 const statusSlotInline = computed(
-  () => !!props.conversationId && !props.currentConversation?.is_draft && isMobile.value,
+  () =>
+    !!props.conversationId &&
+    !props.currentConversation?.is_draft &&
+    !conversationInterrupted.value &&
+    isMobile.value,
 );
 
 const statusBarClass = computed(
   () =>
     `status-bar${props.currentConversation?.archived ? " status-bar-archived" : ""}${
-      !props.conversationId || props.currentConversation?.is_draft ? " status-bar-new" : ""
-    }`,
+      conversationInterrupted.value ? " status-bar-interrupted" : ""
+    }${!props.conversationId || props.currentConversation?.is_draft ? " status-bar-new" : ""}`,
 );
 
 // compact callback for the context bar (only when handler available)
@@ -3539,6 +3570,8 @@ const statusContentProps = computed(() => {
     streamStatus: props.streamStatus,
     error: error.value,
     agentWorking: agentWorking.value,
+    interrupted: conversationInterrupted.value,
+    resumingInterrupted: resumingInterrupted.value,
     cancelling: cancelling.value,
     selectedCwd: selectedCwd.value,
     contextWindowSize: contextWindowSize.value,
@@ -3559,6 +3592,7 @@ const statusContentProps = computed(() => {
     onUnarchive: handleUnarchive,
     onClearError: () => (error.value = null),
     onCancel: handleCancel,
+    onResumeInterrupted: handleResumeInterrupted,
     onDistillNewGeneration: contextBarDistill.value,
     onStartNewGeneration: handleStartNewGeneration,
     onSelectModel: setSelectedModel,
@@ -3811,6 +3845,7 @@ watch(
     }
 
     currentConversationId = id;
+    resumingInterrupted.value = false;
     followExplicitSelectionToBottom = explicitlySelected;
     suppressExplicitSelectionClamp = explicitlySelected;
     stopSavedBottomRestoration();
@@ -3855,6 +3890,7 @@ watch(
       streamingText.value = "";
       streamingThinking.value = "";
       agentWorking.value = false;
+      resumingInterrupted.value = false;
       if (loadingProgressDelay) {
         clearTimeout(loadingProgressDelay);
         loadingProgressDelay = null;
