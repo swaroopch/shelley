@@ -651,7 +651,6 @@ watch(conversationViewMode, () => {
   resetTailFirst();
   primeTailFirstMount();
 });
-const toolPillsEnabled = useFeatureFlag("tool-pills");
 const compactSendThresholdsEnabled = useFeatureFlag("compact-send-thresholds");
 const {
   hasUpdate,
@@ -2010,7 +2009,6 @@ function buildRenderModel(): GenerationBlock[] {
 
     const renderItemInto = (sink: RenderNode[], item: CoalescedItem, index: number) => {
       const isPillable =
-        toolPillsEnabled.value &&
         item.type === "tool" &&
         !isAutoExpandTool(item.toolName, item.toolInput, item.display);
       if (!isPillable || pillBuf.length === 0) {
