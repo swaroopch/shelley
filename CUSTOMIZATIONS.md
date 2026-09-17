@@ -217,6 +217,21 @@ its amended replacement only with a lease against that exact tip. This update
 retains the already-reviewed base and application/test bytes; it is not another
 upstream upgrade or deployment. Existing shared history is preserved.
 
+The amended PR #281 tip is `0dde8eedd4daef2c1e20cbd12b59f258285098c9`:
+one fix commit and only `ui/src/index.html` plus its browser test. The customized
+build and five browser checks passed; the CLA status is success. The API still
+blocks both PR-body edits and review replies. The owner can remove the stale
+manual-checklist sentence and the Summary's mention of added documentation from
+the live PR; the tracked description is already corrected.
+
+Upstream has now landed its own file-completion implementation and refinements
+(`b66c602` and `9d9f6f7`). Auto-sync detects conflicts with the fork's existing
+completion feature and refuses publication, preserving the last working build.
+Keep the timer enabled (unchanged failed inputs are suppressed), do not overwrite
+maintainer cleanup on PR #280, and handle upstream adoption as a deliberate
+separate integration review. Do not deploy merely to resolve this documentation
+review. The keyboard review integration itself changes only fork documentation.
+
 ## Path reference convention
 
 Keep **JSON-escaped double quotes**, not Markdown backticks, around paths
