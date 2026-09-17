@@ -81,3 +81,7 @@
 - The one-time screenshot-history redaction in `HISTORY_REDACTION.md` is
   completed and its exception is closed. Keep private backups private; never
   merge stale, pre-redaction `custom` history back into the published branch.
+- Prefer one focused rebased/squashed commit per upstream PR. Fold review fixes
+  into that feature commit when appropriate, using explicit leases for published
+  branches. Never squash shared `custom`; do not rewrite a PR while its maintainer
+  is already cleaning it up. Keep PR-only explanations in the PR description.

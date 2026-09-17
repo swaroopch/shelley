@@ -6,7 +6,7 @@ Keep the chat input visible above Android Chrome's software keyboard by adding `
 
 The app has a full-height layout. When opening the keyboard only shrinks the visual viewport, the textarea can remain underneath the keyboard even while its toolbar is visible. Requesting a layout-viewport resize lets the existing flex layout keep the composer on-screen, without new JavaScript keyboard-height estimates or resize listeners.
 
-This PR contains only the keyboard fix, regression tests, and documentation. It does not include file completion or fork maintenance/deployment changes. Browsers that do not implement the directive retain their existing behavior; this is not a claim of a Safari keyboard fix.
+This PR contains only the keyboard fix and regression tests. It does not include file completion or fork maintenance/deployment changes. Browsers that do not implement the directive retain their existing behavior; this is not a claim of a Safari keyboard fix.
 
 ## Before / after (real Android phone)
 
@@ -18,7 +18,7 @@ Screenshots are cropped to the composer and keyboard to omit private conversatio
 
 ## Recreation prompt
 
-If you prefer to implement the intent independently rather than reuse this diff:
+If you prefer to implement the intent independently rather than reuse this PR:
 
 ```text
 Fix the Android Chrome chat composer being obscured by the software keyboard.
@@ -47,5 +47,3 @@ behavior: explicitly state that limitation and verify on a physical phone.
 - Both UI type checks, lint, and all 55 UI unit-test files passed on this feature branch.
 - `make build-custom` and `go test ./server -parallel 1` passed.
 - The owner verified the fix with a real Android keyboard (after screenshot above).
-
-A manual device checklist is included in `MOBILE_KEYBOARD_INPUT.md`.

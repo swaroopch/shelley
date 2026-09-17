@@ -17,8 +17,9 @@
 - `mobile-keyboard-input` is a separate upstream-based branch for the Android
   keyboard covering the composer. It opts into native layout-viewport resizing
   instead of adding JS keyboard-height guesses or a second resize mechanism.
-  Its implementation, regression tests, and physical-device checklist live on
-  that branch in `MOBILE_KEYBOARD_INPUT.md`. The owner confirmed on Android
+  Its code and regression tests live on that branch. The physical-device
+  checklist and rationale are fork-only in [docs/mobile-keyboard-input.md](docs/mobile-keyboard-input.md);
+  the standalone root note is removed from PR #281 at the maintainer's request. The owner confirmed on Android
   Chrome that the keyboard leaves the full input visible and approved the fix.
   It is enabled in `.shelley-features`; the integration gate covers keyboard
   viewport policy/layout, desktop composer alignment, and file completion
@@ -33,8 +34,8 @@
   recorded in [MOBILE_KEYBOARD_INPUT_PR.md](MOBILE_KEYBOARD_INPUT_PR.md). The
   screenshots are cropped to exclude private conversation content and hosted
   on `custom` so they do not add binaries to the upstream feature diff. The
-  PR-creation API still rejects POSTs as read-only (HTTP 403); this draft awaits
-  owner submission through the pre-filled GitHub compare page.
+  PR-creation API rejects writes as read-only (HTTP 403); the owner submitted
+  [upstream PR #281](https://github.com/boldsoftware/shelley/pull/281).
 - `custom` is the tested integration branch: upstream plus the feature branches
   listed in [.shelley-features](.shelley-features), plus fork-specific maintenance.
   It preserves merge history. **Never rebase or force-push `custom`.** The
@@ -197,6 +198,24 @@ change from pre-rebase `custom` is declaration ordering), followed by the
 keyboard branch merge and the full combined validation gate. Future syncs must
 start from this reviewed integration, not publish the failed candidate. Neither
 this merge nor the PR rebase installs a binary or updates the canonical checkout.
+
+## Upstream review packaging
+
+For future upstream PRs, prefer a single focused commit rebased onto the target
+branch, with the owner identity and a Conventional Commit subject. Fold review
+fixes into that commit when appropriate and publish with an explicit feature-tip
+lease. Do not squash/rewrite shared `custom` history. Do not disturb PR #280 while
+its maintainer is already performing cleanup; that work is separate from #281.
+
+PR #281 review comment `discussion_r4032985344` requests removal of the standalone
+`MOBILE_KEYBOARD_INPUT.md`, not changes to the viewport fix or tests. Preserve the
+note only in fork-owned `docs/mobile-keyboard-input.md`, remove it from the PR's
+single fix commit, and remove its stale mention from the PR-description draft.
+Keep PR-only explanations in the description unless maintainers request a file.
+The reviewed old feature tip is `a8721129b130faa5dd78ebdccf3b0231dcaabd76`; publish
+its amended replacement only with a lease against that exact tip. This update
+retains the already-reviewed base and application/test bytes; it is not another
+upstream upgrade or deployment. Existing shared history is preserved.
 
 ## Path reference convention
 
