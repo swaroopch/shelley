@@ -1,7 +1,5 @@
 <!-- Vue port of components/BrowserScreencastTool.tsx. Preserves the exact DOM
-     classes, data-testid, and aria contracts the e2e tests rely on. Note: the
-     React version uses local useState(true) for expand (NOT the tool-detail
-     context), so this mirrors that with a plain ref(true). -->
+     classes, data-testid, and aria contracts the e2e tests rely on. -->
 <template>
   <div
     class="screencast-tool"
@@ -11,8 +9,6 @@
       <div class="screencast-tool-summary">
         <span class="screencast-tool-emoji" :class="{ running: isRunning }">{{ emoji }}</span>
         <span class="screencast-tool-label">{{ label }}</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="screencast-tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="screencast-tool-success" />
       </div>
       <button
         class="screencast-tool-toggle"
@@ -67,7 +63,6 @@
 import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 const props = defineProps<{
   toolInput?: unknown;

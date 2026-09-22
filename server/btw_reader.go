@@ -53,6 +53,18 @@ func (s *Server) handleListBtwReaders(w http.ResponseWriter, r *http.Request, pa
 	writeBtwReaderJSON(w, http.StatusOK, map[string]any{"readers": readers})
 }
 
+func (s *Server) handleDismissBtwReader(w http.ResponseWriter, r *http.Request, parentID, childID string) {
+	if _, _, err := s.btwReaderChild(r.Context(), parentID, childID); err != nil {
+		http.Error(w, "BTW reader not found", http.StatusNotFound)
+		return
+	}
+	if err := s.db.DismissBtwReader(r.Context(), parentID, childID); err != nil {
+		http.Error(w, "Failed to dismiss BTW reader", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) createBtwReader(ctx context.Context, parentID, question string) (db.BtwReaderIdentity, error) {
 	if s.conversationDeleting(parentID) {
 		return db.BtwReaderIdentity{}, errConversationDeleting
@@ -246,6 +258,7 @@ func (s *Server) deleteConversation(ctx context.Context, conversationID string) 
 		s.releaseConversationDeletions(ids)
 		return err
 	}
+	s.cancelCommitTourJobs(ids...)
 	deletedReaders = append(deletedReaders, conversationID)
 	s.stopDeletedConversationManagers(deletedReaders)
 	return nil

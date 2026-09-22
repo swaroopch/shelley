@@ -29,7 +29,6 @@ import (
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/server/diskspace"
 	"shelley.exe.dev/server/notifications"
-	"shelley.exe.dev/skills"
 	"shelley.exe.dev/subpub"
 	"shelley.exe.dev/ui"
 )
@@ -162,10 +161,11 @@ type LLMProvider interface {
 // NewLLMServiceManager creates a new LLM service manager from config.
 func NewLLMServiceManager(cfg *LLMConfig) LLMProvider {
 	manager, err := models.NewManager(&models.Config{
-		Models: cfg.Models,
-		Logger: cfg.Logger,
-		DB:     cfg.DB,
-		HTTPC:  cfg.HTTPC,
+		Models:              cfg.Models,
+		TranscriptionModels: cfg.TranscriptionModels,
+		Logger:              cfg.Logger,
+		DB:                  cfg.DB,
+		HTTPC:               cfg.HTTPC,
 	})
 	if err != nil {
 		cfg.Logger.Error("Failed to create models manager", "error", err)
@@ -370,7 +370,7 @@ type Server struct {
 	notifDispatcher          *notifications.Dispatcher
 	conversationListStream   *conversationListStream
 	conversationListGitCache *conversationListGitCache
-	integrationSkills        []skills.Skill
+	integrationSkills        *integrationSkillCache
 	// fileListCache memoizes working-directory file listings for the fuzzy
 	// file finder (/api/find-files) so a burst of queries lists the tree once.
 	fileListCache *fileListCache
@@ -389,8 +389,19 @@ type Server struct {
 	exitDelay         time.Duration
 	exitProcess       func(int)
 	mediaRun          mediaCommandRunner
+	transcriber       recordingTranscriber
 	transcriptionMu   sync.Mutex
 	transcriptionJobs map[string]transcriptionJob
+	// reflectionEmoji fetches the VM emoji for the favicon. Tests replace it to
+	// cover reflection-present and standalone behavior without ambient metadata.
+	reflectionEmoji           func(context.Context) string
+	commitTourMu              sync.Mutex
+	commitTourJobs            map[string]*commitTourJob
+	commitTourRun             commitTourRunner
+	commitTourRecoverySlots   chan struct{}
+	commitTourRecoveryMu      sync.Mutex
+	commitTourRecoveryRunning bool
+	commitTourRecoveryPending bool
 
 	// Banner, when non-empty, is shown in a full-width bar at the top of
 	// the UI. Useful for marking demo instances so they're not confused
@@ -422,30 +433,34 @@ func NewServer(database *db.DB, llmManager LLMProvider, toolSetConfig claudetool
 		logger = slog.Default()
 	}
 	s := &Server{
-		db:                    database,
-		llmManager:            llmManager,
-		toolSetConfig:         toolSetConfig,
-		activeConversations:   make(map[string]*ConversationManager),
-		deletingConversations: make(map[string]bool),
-		logger:                logger,
-		predictableOnly:       predictableOnly,
-		defaultModel:          defaultModel,
-		requireHeader:         requireHeader,
-		versionChecker:        NewVersionChecker(),
-		notifDispatcher:       notifications.NewDispatcher(logger),
-		shutdownCh:            make(chan struct{}),
-		hooksDir:              defaultHooksDir(),
-		exitDelay:             500 * time.Millisecond,
-		exitProcess:           os.Exit,
-		mediaRun:              runMediaCommand,
-		transcriptionJobs:     make(map[string]transcriptionJob),
+		db:                      database,
+		llmManager:              llmManager,
+		toolSetConfig:           toolSetConfig,
+		activeConversations:     make(map[string]*ConversationManager),
+		deletingConversations:   make(map[string]bool),
+		logger:                  logger,
+		predictableOnly:         predictableOnly,
+		defaultModel:            defaultModel,
+		requireHeader:           requireHeader,
+		versionChecker:          NewVersionChecker(),
+		notifDispatcher:         notifications.NewDispatcher(logger),
+		shutdownCh:              make(chan struct{}),
+		hooksDir:                defaultHooksDir(),
+		exitDelay:               500 * time.Millisecond,
+		exitProcess:             os.Exit,
+		mediaRun:                runMediaCommand,
+		transcriber:             newOpenAIRecordingTranscriber(llmManager),
+		transcriptionJobs:       make(map[string]transcriptionJob),
+		reflectionEmoji:         cachedReflectionEmoji,
+		commitTourJobs:          make(map[string]*commitTourJob),
+		commitTourRecoverySlots: make(chan struct{}, 2),
 	}
 
 	s.conversationListStream = newConversationListStream(s)
 	s.streamPub = subpub.New[StreamResponse]()
 	s.conversationListGitCache = newConversationListGitCache()
 	s.fileListCache = newFileListCache()
-	s.integrationSkills = discoverIntegrationSkillsAtStartup(logger)
+	s.integrationSkills = newIntegrationSkillCache(logger, currentIntegrationSkillDiscoverer(logger))
 
 	// Persistent terminal sessions live alongside the database so that they
 	// survive shelley restarts. In tests DBPath is empty; use a unique
@@ -513,6 +528,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/git/repos", compressionHandler(http.HandlerFunc(s.handleGitRepos)))
 	mux.Handle("/api/git/diffs", compressionHandler(http.HandlerFunc(s.handleGitDiffs)))
 	mux.Handle("/api/git/tour", compressionHandler(http.HandlerFunc(s.handleGitTour)))
+	mux.Handle("/api/git/tour/status", compressionHandler(http.HandlerFunc(s.handleCommitTourStatus)))
 	mux.Handle("/api/git/graph", compressionHandler(http.HandlerFunc(s.handleGitGraph)))
 	mux.Handle("/api/git/commit-detail", compressionHandler(http.HandlerFunc(s.handleGitCommitDetail)))
 	mux.Handle("/api/git/diffs/", compressionHandler(http.HandlerFunc(s.handleGitDiffFiles)))
@@ -989,8 +1005,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		if btwReader {
 			managerConfig.SubagentDepth++
 		}
-		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
-		manager.integrationSkills = append([]skills.Skill(nil), s.integrationSkills...)
+		manager := NewConversationManager(conversationID, s.db, s.logger, managerConfig, s.integrationSkills, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.userEmail = userEmail
 		manager.serverPort = s.listenPort
@@ -1061,8 +1076,7 @@ func (s *Server) getOrCreateSubagentConversationManager(ctx context.Context, con
 
 		subagentConfig := s.toolSetConfig
 		subagentConfig.SubagentDepth++
-		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
-		manager.integrationSkills = append([]skills.Skill(nil), s.integrationSkills...)
+		manager := NewConversationManager(conversationID, s.db, s.logger, subagentConfig, s.integrationSkills, recordMessage, recordTurnStart, recordBatch, onStateChange, s.streamPub)
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
 		manager.serverPort = s.listenPort
 		manager.onDone = func() { s.dispatchSubagentDone(conversationID) }
@@ -1241,20 +1255,39 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 // can't re-feed an already-delivered message as a duplicate. Mirrors
 // recordMessage's manager-sync + notify tail.
 //
-// userEmail is the exe.dev author captured at queue time (drain runs on a
-// background context, so it can't be read from the request here); it is
-// stamped onto the new row. Empty when the queuing request carried no header.
-func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string) error {
-	params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil)
-	if err != nil {
-		return err
+// userEmail and userData are provenance captured at queue time (drain runs on
+// a background context, so it can't read the original request). For a
+// transcription batch, only the final user row receives them; synthetic audit
+// rows remain unattributed and carry no sender metadata.
+func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID, queuedID string, message llm.Message, userEmail string, userData json.RawMessage) error {
+	return s.recordDrainedQueuedMessages(ctx, conversationID, queuedID, []llm.Message{message}, userEmail, userData)
+}
+
+// recordDrainedQueuedMessages writes the batch in one Tx; the first row removes
+// the queued entry and the last row carries the user provenance.
+func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID, queuedID string, messages []llm.Message, userEmail string, userData json.RawMessage) error {
+	paramsList := make([]db.CreateMessageParams, 0, len(messages))
+	for i, message := range messages {
+		var userDataArgs []interface{}
+		if i == len(messages)-1 && len(userData) > 0 {
+			userDataArgs = append(userDataArgs, userData)
+		}
+		params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil, userDataArgs...)
+		if err != nil {
+			return err
+		}
+		params.BumpTimestamp = true
+		if i == 0 {
+			params.RemoveQueuedID = queuedID
+		}
+		if i == len(messages)-1 {
+			params.UserEmail = userEmail
+		}
+		paramsList = append(paramsList, params)
 	}
-	params.BumpTimestamp = true
-	params.RemoveQueuedID = queuedID
-	params.UserEmail = userEmail
-	createdMsg, err := s.db.CreateMessage(ctx, params)
+	created, err := s.db.CreateMessages(ctx, paramsList)
 	if err != nil {
-		return fmt.Errorf("failed to create drained queued message: %w", err)
+		return fmt.Errorf("failed to create drained queued messages: %w", err)
 	}
 
 	s.mu.Lock()
@@ -1263,8 +1296,7 @@ func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID,
 	if ok {
 		mgr.Touch()
 	}
-
-	go s.notifySubscribersNewMessage(context.WithoutCancel(ctx), conversationID, createdMsg)
+	go s.notifySubscribersNewMessages(context.WithoutCancel(ctx), conversationID, created)
 	return nil
 }
 
@@ -1274,8 +1306,9 @@ func (s *Server) recordDrainedQueuedMessage(ctx context.Context, conversationID,
 // Only the immediate-send path uses this; queued messages persist the email in
 // their QueuedMessage entry instead (drain runs on a background context).
 type (
-	userEmailContextKey    struct{}
-	turnUserDataContextKey struct{}
+	userEmailContextKey       struct{}
+	turnUserDataContextKey    struct{}
+	localCLIRequestContextKey struct{}
 )
 
 // contextWithUserEmail returns a child context carrying userEmail. An empty
@@ -1297,6 +1330,29 @@ func contextWithTurnUserData(ctx context.Context, userData any) context.Context 
 
 func turnUserDataFromContext(ctx context.Context) any {
 	return ctx.Value(turnUserDataContextKey{})
+}
+
+func marshalTurnUserData(ctx context.Context) (json.RawMessage, error) {
+	turnData := turnUserDataFromContext(ctx)
+	if turnData == nil {
+		return nil, nil
+	}
+	return json.Marshal(turnData)
+}
+
+func contextWithLocalCLIRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localCLIRequestContextKey{}, true)
+}
+
+func isLocalCLIRequest(ctx context.Context) bool {
+	trusted, _ := ctx.Value(localCLIRequestContextKey{}).(bool)
+	return trusted
+}
+
+func localCLIHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(contextWithLocalCLIRequest(r.Context())))
+	})
 }
 
 // recordTurnStartMessage records the user message that starts an agent turn,
@@ -1982,8 +2038,12 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 			s.logger.Warn("Failed to chmod socket", "path", actualSocketPath, "error", err)
 		}
 
-		// Unix socket handler: relaxed middleware (only logger, no CSRF or requireHeader)
-		socketHandler := LoggerMiddleware(s.logger)(mux)
+		// Unix socket handler: relaxed middleware (only logger, no CSRF or
+		// requireHeader). Mark it trusted so the CLI may attach sender
+		// provenance that browser/TCP callers cannot forge. Same-UID processes
+		// still self-report the sender ID; this is attribution, not proof of
+		// which conversation launched the process.
+		socketHandler := LoggerMiddleware(s.logger)(localCLIHandler(mux))
 
 		socketServer = &http.Server{
 			Handler: socketHandler,
@@ -2004,6 +2064,7 @@ func (s *Server) StartWithListeners(tcpListener net.Listener, socketPath string)
 	// Recover durable queued transcription workers independently of browser
 	// connections and request lifetimes.
 	go s.recoverQueuedTranscriptions(context.Background())
+	go s.recoverCommitTourWorkers(context.Background())
 
 	// Wait for shutdown signal or server error
 	quit := make(chan os.Signal, 1)

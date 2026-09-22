@@ -1485,6 +1485,21 @@ body {
   overflow-wrap: anywhere;
 }
 
+.message-author-conversation {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.message-author-conversation a {
+  color: var(--link-color);
+}
+
+.message-conversation > .message-content {
+  width: 100%;
+}
+
 .message-agent .message-content,
 .message-tool .message-content {
   margin-right: auto;
@@ -1766,21 +1781,36 @@ body {
   justify-content: space-between;
 }
 
+.tool-result-primary {
+  min-width: 0;
+}
+
+.tool-result-name,
 .tool-result-status {
+  min-width: 0;
   font-size: 0.75rem;
-}
-
-.tool-result-status.success {
-  color: var(--success-text);
-}
-
-.tool-result-status.error {
-  color: var(--error-text);
+  overflow-wrap: anywhere;
 }
 
 .tool-result-time {
   font-size: 0.75rem;
   color: var(--text-tertiary);
+}
+
+@media (max-width: 640px) {
+  .tool-result-meta {
+    align-items: flex-start;
+  }
+
+  .tool-result-primary {
+    display: grid;
+    flex: 1 1 auto;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tool-result-primary .tool-result-status {
+    grid-column: 2;
+  }
 }
 
 /* Tool running state */
@@ -1850,14 +1880,16 @@ body {
 }
 
 /* Tool Component (shared styles for all tools) */
-.tool {
+.tool,
+.message-conversation {
   background: var(--gray-100);
   border-radius: 0.5rem;
   margin: 0.5rem 0;
   width: 100%;
 }
 
-.dark .tool {
+.dark .tool,
+.dark .message-conversation {
   background: var(--gray-800);
 }
 
@@ -1912,23 +1944,8 @@ body {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* ToolStatusIcon: the ✓/✗ in a tool card header. The colour comes from the
-   per-card .*-success / .*-error class the caller passes; this only handles
-   the box, so the glyph sits on the text baseline like the emoji beside it. */
-.tool-status-icon {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
 .tool-success {
   color: var(--success-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
-.tool-error {
-  color: var(--error-text);
   font-size: 0.875rem;
   flex-shrink: 0;
 }
@@ -2014,9 +2031,8 @@ body {
   color: var(--text-primary);
 }
 
-/* Error output is signalled by the ✗ status icon in the header, not by
- * painting the whole output box red, so `.tool-code.error` carries no
- * styling (it intentionally renders like a normal code block). */
+/* Expanded output labels identify failures without painting the whole
+ * output box red, so `.tool-code.error` renders like a normal code block. */
 
 /* Bash Tool Component - uses shared tool styles */
 .bash-tool {
@@ -2093,24 +2109,6 @@ body {
   font-style: italic;
   flex-shrink: 0;
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-.bash-tool-success {
-  color: var(--success-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
-.bash-tool-error {
-  color: var(--error-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
-.bash-tool-cancelled {
-  color: var(--error-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
 }
 
 .bash-tool-toggle {
@@ -2311,16 +2309,6 @@ body {
   font-style: italic;
   flex-shrink: 0;
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-.patch-tool-success {
-  color: var(--success-text);
-  flex-shrink: 0;
-}
-
-.patch-tool-error {
-  color: var(--text-secondary);
-  flex-shrink: 0;
 }
 
 .patch-tool-header-controls {
@@ -2627,18 +2615,6 @@ diffs-container {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-.screenshot-tool-success {
-  color: var(--success-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
-.screenshot-tool-error {
-  color: var(--error-text);
-  font-size: 0.875rem;
-  flex-shrink: 0;
-}
-
 .screenshot-tool-toggle {
   background: none;
   border: none;
@@ -2769,18 +2745,6 @@ diffs-container {
   align-items: center;
 }
 
-.screencast-tool-success {
-  color: var(--green-600);
-  font-weight: bold;
-  margin-left: 0.25rem;
-}
-
-.screencast-tool-error {
-  color: var(--error-text);
-  font-weight: bold;
-  margin-left: 0.25rem;
-}
-
 .screencast-tool-details {
   padding: 0 0.75rem 0.75rem;
 }
@@ -2897,18 +2861,6 @@ diffs-container {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
-}
-
-.output-iframe-tool-success {
-  color: var(--success-text);
-  font-weight: 600;
-  margin-left: 0.5rem;
-}
-
-.output-iframe-tool-error {
-  color: var(--error-text);
-  font-weight: 600;
-  margin-left: 0.5rem;
 }
 
 .output-iframe-tool-actions {
@@ -3442,6 +3394,58 @@ diffs-container {
 }
 
 /* Inline media recording takeover */
+/* Detached controls retain the same recorder while another chat is selected. */
+.recording-floating {
+  position: fixed;
+  z-index: 30;
+  right: 1rem;
+  bottom: calc(9rem + env(safe-area-inset-bottom, 0px));
+  width: min(32rem, calc(100vw - 2rem));
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--bg-base);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
+}
+
+.recording-return {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.375rem;
+  padding: 0.25rem 0.375rem;
+  border: 0;
+  border-radius: 0.25rem;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.recording-return:hover {
+  background: var(--bg-hover);
+}
+
+.recording-floating .recording-panel {
+  height: auto;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.recording-floating .recording-panel-main {
+  flex-basis: 100%;
+}
+
+.recording-floating .recording-actions {
+  margin-left: auto;
+}
+
+.recording-floating .recording-preserved-text {
+  max-width: 8rem;
+}
+
 .recording-panel {
   display: flex;
   align-items: center;
@@ -3474,6 +3478,7 @@ diffs-container {
 }
 
 .recording-waveform {
+  position: relative;
   display: flex;
   width: 42px;
   height: 20px;
@@ -3483,12 +3488,36 @@ diffs-container {
   gap: 2px;
 }
 
+.recording-waveform::before {
+  position: absolute;
+  right: 0;
+  left: 0;
+  top: 50%;
+  height: 1px;
+  background: color-mix(in srgb, #dc2626 20%, transparent);
+  content: "";
+}
+
 .recording-waveform-bar {
+  position: relative;
   width: 2px;
   max-height: 18px;
   border-radius: 1px;
   background: #dc2626;
   transition: height 80ms linear;
+}
+
+.recording-waveform-preroll {
+  opacity: 0.18;
+  transform: scaleY(0.4);
+}
+
+.recording-waveform-preroll,
+.recording-waveform-preroll .recording-waveform-bar {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    height 80ms linear;
 }
 
 .recording-status {
@@ -3511,7 +3540,16 @@ diffs-container {
 }
 
 .recording-status-dot.starting,
-.recording-status-dot.stopping,
+.recording-status-dot.stopping {
+  width: 0.75rem;
+  height: 0.75rem;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--orange-500, #f97316) 30%, transparent);
+  border-top-color: var(--orange-500, #f97316);
+  background: transparent;
+  animation: recording-start-spin 0.65s linear infinite;
+}
+
 .recording-status-dot.transcribing {
   background: var(--orange-500, #f97316);
 }
@@ -3521,6 +3559,11 @@ diffs-container {
   animation: recording-pulse 1.5s ease-in-out infinite;
 }
 
+.recording-status-dot.preroll {
+  background: #dc2626;
+  opacity: 0.45;
+}
+
 .recording-status-dot.error {
   background: var(--error-text);
 }
@@ -3528,6 +3571,12 @@ diffs-container {
 @keyframes recording-pulse {
   50% {
     opacity: 0.35;
+  }
+}
+
+@keyframes recording-start-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -3598,6 +3647,11 @@ diffs-container {
 }
 
 @media (max-width: 640px) {
+  .recording-floating {
+    top: calc(5.5rem + env(safe-area-inset-top, 0px));
+    bottom: auto;
+  }
+
   .recording-panel {
     height: 42px;
     flex-direction: row;
@@ -3618,6 +3672,7 @@ diffs-container {
     display: none;
   }
 
+  .recording-status[data-state="preroll"] .recording-status-label,
   .recording-status[data-state="recording"] .recording-status-label {
     position: absolute;
     width: 1px;
@@ -3650,6 +3705,12 @@ diffs-container {
 
   .recording-screen-btn {
     margin-right: 0;
+  }
+}
+
+@media print {
+  .recording-floating {
+    display: none;
   }
 }
 
@@ -3733,21 +3794,23 @@ diffs-container {
   white-space: nowrap;
 }
 
+.file-completion-menu {
+  gap: 0;
+  padding-inline: 0;
+}
+
+.file-completion-list {
+  display: flex;
+  flex-direction: column;
+}
+
 .file-completion-item {
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 8px;
+  align-items: flex-start;
 }
 
-.file-completion-icon {
-  width: 16px;
-  height: 16px;
-  color: var(--text-secondary);
-}
-
-.file-completion-item .slash-command-name {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.file-completion-grep-pending {
+  border-top: 1px solid var(--border);
+  padding-block: 5px;
 }
 
 .file-completion-status {
@@ -4113,6 +4176,7 @@ select:disabled {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  min-width: 0;
   gap: 0.75rem;
 }
 
@@ -4132,6 +4196,9 @@ select:disabled {
   font-size: 0.75rem;
   line-height: 1.2;
   color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-message.status-warning {
@@ -4171,9 +4238,27 @@ select:disabled {
   }
 }
 
+/* Working text gives up space before the directory/model readout. */
 .animated-working {
-  display: inline;
+  container: working-status / inline-size;
+  flex: 0 1000 16ch;
+  width: 16ch;
+  min-width: 3ch;
+  overflow: hidden;
+  white-space: nowrap;
   font-family: var(--font-mono);
+}
+
+@container working-status (width < 16ch) {
+  .working-prefix {
+    display: none;
+  }
+}
+
+@container working-status (width < 10ch) {
+  .working-word {
+    display: none;
+  }
 }
 
 .animated-working .bold-letter {
@@ -4683,9 +4768,7 @@ svg {
   transform: translateX(-50%) scale(0.95);
 }
 
-/* Floating nav cluster — bottom of messages area. Contains TOC button
-   (always visible) and an optional scroll-to-bottom button. Replaces the
-   centered scroll-to-bottom button so the TOC is a first-class control. */
+/* Floating scroll control at the bottom of the messages area. */
 .chat-nav-cluster {
   position: absolute;
   bottom: 1rem;
@@ -4700,7 +4783,7 @@ svg {
 .chat-nav-cluster > * {
   pointer-events: auto;
 }
-/* Override centered positioning when inside the cluster; match TOC button size */
+/* Keep the floating scroll control at the bottom-right. */
 .chat-nav-cluster .scroll-to-bottom-button {
   position: static;
   transform: none;
@@ -4718,27 +4801,34 @@ svg {
   height: 1.125rem;
 }
 
-/* TOC trigger button */
+/* Teleport targets place the persistent TOC directly in the flex row. */
+.status-navigation {
+  display: contents;
+}
+
+/* Inline TOC trigger, immediately after the model readout. */
 .toc-button {
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  width: 2.5rem;
-  height: 2.5rem;
+  flex: none;
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: var(--text-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  transition:
-    background 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.1s ease;
+  color: var(--text-secondary);
+  transition: background 0.15s ease;
 }
 .toc-button:hover {
   background: var(--bg-hover);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+}
+.toc-button:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 1px;
 }
 .toc-button:active {
   transform: scale(0.95);
@@ -5639,12 +5729,6 @@ svg {
   background: var(--bg-secondary);
 }
 
-.status-working-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
 /* Right-hand status readout: "~/dir · 15k · model-name", dot-separated. One
    type style for every segment (the cwd used to be mono at a different size,
    which read as three unrelated widgets sitting next to each other) — set
@@ -5741,6 +5825,7 @@ svg {
 }
 
 .status-stop-button {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -5917,23 +6002,13 @@ svg {
     flex: 1;
     min-width: 0;
     overflow: hidden;
+    gap: 0.375rem;
     font-size: 0.875rem;
   }
 
   /* Compact the status bar active layout when inline */
   .message-controls-status-slot .status-bar-active {
     gap: 0.375rem;
-  }
-
-  /* The hostname readout yields room to the context usage label rather than
-     wrapping to a second line. Scoped to .status-ready: error and
-     no-models messages are the whole point of the status bar when they
-     appear, and must keep wrapping rather than be clipped. */
-  .message-controls-status-slot .status-message.status-ready {
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   /* Let new-conversation fields share a row when they fit and wrap naturally
@@ -7225,6 +7300,98 @@ svg {
   min-width: 0;
 }
 
+.tour-file-heading {
+  margin-top: 0.125rem;
+}
+
+.diff-viewer-tour-contents-tree .tour-change-row {
+  gap: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  cursor: default;
+}
+
+.tour-visibility-control,
+.tour-change-link {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.tour-visibility-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  flex: 0 0 16px;
+  padding: 0 2px;
+}
+
+button.tour-visibility-control,
+.tour-change-link {
+  cursor: pointer;
+}
+
+button.tour-visibility-control:hover .tour-visibility-icon {
+  color: inherit;
+}
+
+button.tour-visibility-control:focus-visible,
+.tour-change-link:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 1px;
+  border-radius: 0.125rem;
+}
+
+.tour-change-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.2rem 0 0.2rem 0.35rem;
+  text-align: left;
+}
+
+.tour-visibility-icon {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  color: var(--text-secondary);
+}
+
+.tour-change-row.active .tour-visibility-icon {
+  color: inherit;
+}
+
+.tour-change-row .tour-change-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: inherit;
+  color: inherit;
+}
+
+.tour-change-collapsed:not(.active) {
+  color: var(--text-secondary);
+}
+
+.tour-trivial-label {
+  flex-shrink: 0;
+  padding: 0.0625rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: inherit;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 0.625rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
 .tour-file-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -7242,8 +7409,10 @@ svg {
   flex-shrink: 0;
 }
 
-.diff-viewer-tour-contents-tree .diff-tree-decoration {
-  font-size: 0.5625rem;
+.diff-viewer-tour-contents-tree .diff-tree-decoration,
+.diff-viewer-tour-contents-tree .diff-tree-row.active .diff-tree-decoration {
+  font-size: inherit;
+  background: transparent;
 }
 
 .diff-viewer-tour-contents-item button[aria-current="location"] {
@@ -8290,7 +8459,7 @@ svg {
 }
 
 .command-palette-item-title {
-  font-size: 0.875rem;
+  font-size: 1rem;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -9715,9 +9884,68 @@ kbd {
   overflow-x: auto;
 }
 
+.markdown-content .shelley-code-block {
+  margin: 0.75em 0;
+  background: var(--code-bg);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.markdown-content .shelley-code-block pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+.shelley-code-header {
+  height: 26px;
+  padding: 0 7px 0 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.shelley-code-copy {
+  position: relative;
+  display: flex;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.shelley-code-copy::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+
+.shelley-code-copy:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .dark .markdown-content pre {
   background: var(--bg-base);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.dark .markdown-content .shelley-code-block {
+  background: var(--bg-base);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.dark .markdown-content .shelley-code-block pre {
+  box-shadow: none;
 }
 
 .markdown-content pre code {
@@ -10434,9 +10662,35 @@ kbd {
   margin-left: 0.3em;
 }
 
-.msg-diff-link {
+.msg-diff-link,
+.msg-tour-action,
+.msg-tour-building {
   color: var(--blue-text);
   text-decoration: underline;
+}
+
+.msg-tour-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-style: inherit;
+  cursor: pointer;
+}
+
+.msg-tour-action:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.msg-tour-building {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+}
+
+.msg-tour-failed {
+  color: var(--error-text);
 }
 
 .msg-distill-container {
@@ -10526,6 +10780,7 @@ kbd {
   font-size: 0.75rem;
   color: var(--text-secondary);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  width: min(440px, calc(100vw - 1rem));
   max-width: calc(100vw - 1rem);
 }
 .chat-context-popup.p-popover:before,
@@ -10596,12 +10851,12 @@ kbd {
 
 .token-cost-graph {
   margin-top: 0;
-  width: 280px;
+  width: 100%;
   max-width: 100%;
 }
 
 .context-composition-graph {
-  width: 280px;
+  width: 100%;
   max-width: 100%;
 }
 
@@ -11378,48 +11633,6 @@ kbd {
   white-space: nowrap;
   min-width: 0;
   flex: 1;
-}
-
-/* Live segment attached to a subagent tool pill: its own small chip to
- * the right of the pill (a button can't nest interactive content). */
-.subagent-pill-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  min-height: 26px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px dashed var(--tp-border, var(--border));
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.subagent-pill-live:hover {
-  color: var(--link-color);
-  border-color: var(--link-color);
-}
-
-.subagent-pill-live:focus-visible {
-  outline: 2px solid var(--link-color);
-  outline-offset: 1px;
-}
-
-.subagent-pill-activity {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 600px) {
-  .subagent-pill-activity {
-    max-width: 110px;
-  }
 }
 
 /* ConfigFieldInput styles */
@@ -13034,7 +13247,8 @@ kbd {
 /* Fuzzy file finder: content-match snippet under the path line. .grp-main is
    a flex row (path | meta); wrapping lets the full-width snippet drop onto
    its own line without disturbing GitRepoPicker's use of the same classes. */
-.ff-modal .grp-main {
+.ff-modal .grp-main,
+.file-completion-item .grp-main {
   flex-wrap: wrap;
   row-gap: 0.1rem;
 }
@@ -13548,326 +13762,6 @@ kbd {
 
 .conversation-tag-inline-input::placeholder {
   opacity: 0.5;
-}
-
-/* ============================================================
- * Tool pills (iOS-style)
- *
- * A burst of tool calls is rendered as a single wrapped row of
- * tightly-packed pills. Tapping a pill opens the full
- * CoalescedToolCall view in a modal. Diffs, screenshots, image
- * reads and output_iframe results continue to render inline.
- * Mirrors iOS/exe.dev/ToolPillsRow.swift.
- * ============================================================ */
-
-.tool-pills-row-wrap .message-content {
-  padding: 0;
-  background: none;
-  border: none;
-}
-
-.tool-pills-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 4px 0;
-  margin: 0;
-  list-style: none;
-  align-items: center;
-}
-
-.tool-pill-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  /* Let a wide pill (a long headline, or a long line of live output) shrink
-   * to the row instead of overflowing it: as a flex item this needs
-   * min-width:0, otherwise its automatic minimum size is its content width. */
-  min-width: 0;
-  max-width: 100%;
-}
-
-.tool-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  min-height: 26px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--tp-border, var(--border));
-  background: var(--tp-bg, var(--bg-tertiary));
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.8125rem;
-  line-height: 1.2;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    filter 0.12s ease,
-    transform 0.06s ease;
-}
-
-.tool-pill:hover {
-  filter: brightness(1.04);
-}
-
-.tool-pill:active {
-  transform: translateY(0.5px);
-}
-
-.tool-pill:focus-visible {
-  outline: 2px solid var(--link-color);
-  outline-offset: 1px;
-}
-
-.tool-pill-emoji {
-  font-size: 0.8125rem;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-/* The pill's label: its headline (.tool-pill-text) or, while the tool runs and
- * reports output, the last line it printed (.tool-pill-output). ToolPillLabel
- * renders one or the other, never both, so they share their layout. Pills stay
- * chip-sized rather than growing to the conversation width: each label already
- * bounds its own text (the headline budget in toolMeta.ts, MAX_LEN in
- * lastLine.ts), and max-width is the visual guard for both. */
-.tool-pill-text,
-.tool-pill-output {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  max-width: 360px;
-  /* overflow:hidden both clips the text and opts these flex items out of the
-   * automatic minimum content size, so a narrow row shrinks them further. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Live output reads as transient: dimmer than the pill's --text-primary. */
-.tool-pill-output {
-  color: var(--text-secondary);
-}
-
-.tool-pill-spinner {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid var(--tp-border, var(--text-secondary));
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: tool-pill-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes tool-pill-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.tool-pill-err {
-  /* Exit-code/error is a low-priority signal: a small muted glyph, not a
-   * red chip. The pill keeps its neutral background (see .tool-pill--error). */
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-/* Errored pills keep the normal neutral chip styling; the small muted
- * ✗ glyph is the only differentiator. No red overrides here. */
-
-/* No per-tool tint on the web. Web's tool widgets are monochrome
- * with a single blue accent, and a rainbow row of pills clashes
- * with the rest of the conversation surface. The emoji already
- * encodes tool identity at-a-glance; the pill itself just needs to
- * look like a tappable chip. (iOS uses color because its native
- * surfaces are richer, see ToolPillsRow.swift.) */
-
-/* Pill in the expanded state: keep it visually anchored to the
- * card that opened below it. */
-.tool-pill--expanded {
-  background: var(--bg-secondary, var(--bg-tertiary));
-  border-color: var(--link-color);
-}
-
-/* Inline-expanded tool cards live directly under the pill row
- * inside the same .message-content wrapper. */
-.tool-pill-expanded-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.tool-pill-expanded > .message-tool {
-  margin: 0;
-}
-
-@media (max-width: 600px) {
-  /* Headline only, deliberately: while a tool runs, .tool-pill-output is the
-   * pill's only label and may use the full row, which on a phone is narrower
-   * than the desktop cap anyway (so the cap never actually binds there). */
-  .tool-pill-text {
-    max-width: 150px;
-  }
-}
-
-/* ============================================================
- * Tool detail modal: a WIDE, FLAT detail view for the
- * CoalescedToolCall card shown in a dialog when a pill is clicked.
- *
- * The inline (non-modal) tool cards are a gray rounded card with their
- * own clickable header. Inside the modal that produces ugly
- * double-boxing and shows the command up to three times. Everything
- * below is scoped to .tool-detail-modal so the inline cards are
- * untouched: we flatten the card, hide its header (the modal title
- * + status strip name the tool and its result), and let the boxed
- * sections sit directly on the flat modal background.
- * ============================================================ */
-.tool-detail-modal {
-  width: min(960px, 94vw);
-  max-width: 94vw;
-}
-
-.tool-detail-modal .tool-pill-expanded > .message-tool {
-  margin: 0;
-}
-
-/* Flatten the outer card: no gray card-within-card. */
-.tool-detail-modal .bash-tool,
-.tool-detail-modal .tool {
-  background: none;
-  margin: 0;
-}
-
-.dark .tool-detail-modal .bash-tool,
-.dark .tool-detail-modal .tool {
-  background: none;
-}
-
-/* Hide the card's own header entirely: the modal title names the tool
- * and the titleRight status strip carries result + duration, so the
- * card header (command line, cwd, duplicate status, chevron) is
- * redundant. */
-.tool-detail-modal .bash-tool-header,
-.tool-detail-modal .tool-header {
-  display: none;
-}
-
-/* Align the body to the modal padding (the modal-body already pads). */
-.tool-detail-modal .bash-tool-details,
-.tool-detail-modal .llm-one-shot-images,
-.tool-detail-modal .tool-details {
-  padding: 0;
-  gap: 1rem;
-}
-
-/* Polish the code/pre boxes so they look intentional on the flat
- * background: comfortable padding, subtle rounded border, readable
- * line-height, and scroll when content is large. */
-.tool-detail-modal .bash-tool-code,
-.tool-detail-modal .tool-code {
-  padding: 0.875rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  line-height: 1.55;
-  /* The modal body is the single scroll container — don't cap the box
-   * height or add a nested overflow, otherwise long output produces two
-   * scrollbars (inner box + modal body). Let it grow and scroll the body. */
-  max-height: none;
-  overflow-x: auto;
-  overflow-y: visible;
-}
-
-/* Fallback render path: unmapped tools (no entry in TOOL_COMPONENTS) use
- * the generic .tool-result-details card. Flatten it the same way and
- * strip the red error tint so it matches the specialised tool cards. */
-.tool-detail-modal .tool-result-details,
-.tool-detail-modal .tool-result-details.error {
-  border: none;
-  margin: 0;
-}
-
-.tool-detail-modal .tool-result-summary {
-  display: none;
-}
-
-.tool-detail-modal .tool-result-content {
-  padding: 0;
-}
-
-.tool-detail-modal .tool-result-section.error.output,
-.tool-detail-modal .tool-result-section.output,
-.tool-detail-modal .tool-result-section {
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-}
-
-.tool-detail-modal .tool-result-section.error.output .tool-result-label {
-  color: var(--text-secondary);
-}
-
-/* Specialised tool error messages (screenshot/screencast/output-iframe)
- * paint a red box inline; inside the detail modal we keep the rest of the
- * surface neutral, so render these as ordinary code blocks too. */
-.tool-detail-modal .screenshot-tool-error-message,
-.tool-detail-modal .screencast-tool-error-message,
-.tool-detail-modal .output-iframe-tool-error-message {
-  background: var(--bg-base);
-  border-color: var(--border);
-  color: var(--text-primary);
-}
-
-/* ------------------------------------------------------------
- * Status strip (Modal titleRight): a small, muted badge with the
- * run state and execution duration. Tasteful and monochrome — even
- * a failure is just a soft ✗, never a red banner.
- * ------------------------------------------------------------ */
-.tool-detail-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-}
-
-.tool-detail-status-label {
-  font-weight: 500;
-}
-
-.tool-detail-status-glyph {
-  font-weight: 600;
-}
-
-.tool-detail-status--success .tool-detail-status-glyph {
-  color: var(--success-text);
-}
-
-/* Failure and cancellation stay muted — the ✗ reads as secondary text,
- * not an alarm. */
-.tool-detail-status--failed .tool-detail-status-glyph,
-.tool-detail-status--failed .tool-detail-status-label,
-.tool-detail-status--cancelled .tool-detail-status-glyph,
-.tool-detail-status--cancelled .tool-detail-status-label {
-  color: var(--text-secondary);
-}
-
-.tool-detail-status-time {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-}
-
-.tool-detail-status-spinner {
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid var(--text-secondary);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: tool-pill-spin 0.8s linear infinite;
-  flex-shrink: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -14888,7 +14782,7 @@ kbd {
  * Users who ask for less motion should get it. This is also what makes the e2e
  * suite quick: PrimeVue's Dialog animates in and out over 0.3s, and Playwright
  * waits for an element to stop moving before clicking it, so every open/close
- * of a tool-detail modal cost ~0.6s of pure waiting. The universal rule below
+ * of a dialog costs ~0.6s of pure waiting. The universal rule below
  * covers PrimeVue's runtime-injected theme too -- !important outranks
  * specificity, so `*` beats its single-class .p-dialog-enter-active rule.
  *
@@ -14924,12 +14818,15 @@ kbd {
   /* Looping progress indicators keep looping. iteration-count is untouched by
      the rule above, so only the duration needs restoring. */
   .bash-tool-running,
+  .btw-inline-spinner,
   .command-palette-spinner,
   .conversation-loading-bar-fill,
   .export-spinner,
   .message-voice-btn.listening,
   .patch-tool-running,
   .recording-status-dot.recording,
+  .recording-status-dot.starting,
+  .recording-status-dot.stopping,
   .reconnecting-dots,
   .screencast-tool-emoji,
   .screenshot-tool-running,
@@ -14938,9 +14835,6 @@ kbd {
   .streaming-cursor,
   .thinking-dots,
   .thinking-dots span,
-  .tool-detail-status-spinner,
-  .tool-detail-status-time,
-  .tool-pill-spinner,
   .tool-running,
   .tool-running-header,
   .tool-status-running,

@@ -6,8 +6,6 @@
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">🌐</span>
         <span class="tool-command" :title="externalUrl">{{ displayUrl }}</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
       </div>
       <button
         class="tool-toggle"
@@ -38,12 +36,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
 import { localhostLinkOptionsFromInit, rewriteLocalhostLink } from "../../../utils/linkify";
-import { useToolExpanded } from "../../composables/toolDetail";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 const props = defineProps<{
   toolInput?: unknown;
@@ -53,7 +49,7 @@ const props = defineProps<{
   executionTime?: string;
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const url = computed(() => {
   const ti = props.toolInput;

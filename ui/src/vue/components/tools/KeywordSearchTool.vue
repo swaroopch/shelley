@@ -1,15 +1,10 @@
-<!-- Vue port of components/KeywordSearchTool.tsx.
-     Preserves: .tool, .tool-header, .tool-summary, .tool-emoji 🔍, .tool-command,
-     .tool-toggle, .tool-details, .tool-section, .tool-label, .tool-code,
-     .tool-time, .tool-error, .tool-success, data-testid tool-call-running/completed. -->
+<!-- Retained for historical conversations; keyword_search is no longer an executable tool. -->
 <template>
   <div class="tool" :data-testid="isComplete ? 'tool-call-completed' : 'tool-call-running'">
-    <div class="tool-header" @click="isExpanded = !isExpanded">
+    <div class="tool-header keyword-search-tool-header" @click="isExpanded = !isExpanded">
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">🔍</span>
         <span class="tool-command" :title="fullText">{{ displayText }}</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
       </div>
       <button
         class="tool-toggle"
@@ -43,11 +38,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 const props = defineProps<{
   toolInput?: unknown;
@@ -57,7 +50,7 @@ const props = defineProps<{
   executionTime?: string;
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const query = computed(() => {
   const ti = props.toolInput;
@@ -74,15 +67,11 @@ const query = computed(() => {
 
 const searchTerms = computed<string[]>(() => {
   const ti = props.toolInput;
-  if (
-    typeof ti === "object" &&
-    ti !== null &&
-    "search_terms" in ti &&
-    Array.isArray((ti as { search_terms: unknown }).search_terms)
-  ) {
-    return (ti as { search_terms: string[] }).search_terms;
-  }
-  return [];
+  if (typeof ti !== "object" || ti === null || !("search_terms" in ti)) return [];
+  const terms = ti.search_terms;
+  // The retired tool also accepted a bare string as one term, not a comma-separated list.
+  if (typeof terms === "string") return [terms];
+  return Array.isArray(terms) ? terms : [];
 });
 
 const output = computed(() =>

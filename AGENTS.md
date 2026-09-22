@@ -85,3 +85,8 @@
   into that feature commit when appropriate, using explicit leases for published
   branches. Never squash shared `custom`; do not rewrite a PR while its maintainer
   is already cleaning it up. Keep PR-only explanations in the PR description.
+
+- Upstream-only application policy (September 22, 2026): both contributions have
+  landed. Keep `.shelley-features` empty; do not restore retired fork application
+  patches or their old absolute-path completion convention. Retain provisioning,
+  operational records, and tested merge-based upstream synchronization only.

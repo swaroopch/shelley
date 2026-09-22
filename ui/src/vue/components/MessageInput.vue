@@ -36,13 +36,35 @@
     <div v-if="isDraggingOver" class="drag-overlay">
       <div class="drag-overlay-content">{{ t("dropFilesHere") }}</div>
     </div>
-    <RecordingPanel
-      v-if="recordingActive"
-      :preserved-text="recordingSubmission?.message"
-      :on-complete="handleRecordingComplete"
-      @close="closeRecording"
-    />
-    <form v-else class="message-input-form" @submit="handleSubmit">
+    <!-- Teleport moves the same recorder; navigation must never remount it. -->
+    <Teleport to="body" :disabled="!recordingFloating">
+      <div
+        v-if="recordingActive"
+        :class="{ 'recording-floating': recordingFloating }"
+        :data-testid="recordingFloating ? 'recording-floating' : 'recording-inline'"
+      >
+        <button
+          v-if="recordingFloating"
+          type="button"
+          class="recording-return"
+          data-testid="recording-return-button"
+          @click="recordingSubmission?.destination?.returnTo()"
+        >
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 10-5-5 5-5M4 5h10a6 6 0 0 1 0 12h-3" />
+          </svg>
+          {{ t("recordingReturn") }}
+        </button>
+        <RecordingPanel
+          :initial-mode="recordingSubmission!.mode"
+          :initial-screen="recordingSubmission?.screen"
+          :preserved-text="recordingSubmission?.message"
+          :on-complete="handleRecordingComplete"
+          @close="closeRecording"
+        />
+      </div>
+    </Teleport>
+    <form v-if="!recordingActive || recordingFloating" class="message-input-form" @submit="handleSubmit">
       <input
         ref="fileInputRef"
         type="file"
@@ -105,57 +127,80 @@
       <div class="textarea-wrapper">
         <div
           v-if="showFileMenu"
-          :id="fileMenuId"
           ref="fileMenuRef"
           class="slash-command-menu file-completion-menu"
-          role="listbox"
-          aria-label="Files and folders"
           data-testid="file-completion-menu"
         >
           <div
-            v-if="fileLoading || fileError || !fileMatches.length"
+            v-if="fileError || (fileLoading && !fileMatches.length)"
             class="file-completion-status"
             role="status"
           >
-            {{
-              fileError ||
-              (fileLoading ? "Searching files and folders…" : "No matching files or folders")
-            }}
+            {{ fileError || "Searching files and folders…" }}
           </div>
-          <button
-            v-for="(item, index) in fileMatches"
-            :id="`${fileMenuId}-${index}`"
-            :key="item.path"
-            type="button"
-            :class="`slash-command-item file-completion-item${index === fileSelected ? ' selected' : ''}`"
-            role="option"
-            :aria-selected="index === fileSelected"
-            :aria-label="item.is_dir ? `${item.path} (folder)` : item.path"
-            :data-kind="item.is_dir ? 'folder' : 'file'"
-            :title="item.path"
-            @mousedown.prevent
-            @mouseenter="fileSelected = index"
-            @click="chooseFile(index)"
+          <div
+            :id="fileMenuId"
+            class="file-completion-list"
+            role="listbox"
+            aria-label="Files and folders"
           >
-            <svg
-              class="file-completion-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              aria-hidden="true"
+            <button
+              v-for="(item, index) in fileMatches"
+              :id="`${fileMenuId}-${index}`"
+              :key="item.path"
+              type="button"
+              :class="`file-completion-item grp-row${index === fileSelected ? ' grp-row-active' : ''}`"
+              role="option"
+              :aria-selected="index === fileSelected"
+              :aria-label="item.is_dir ? `${item.path} (folder)` : item.path"
+              :data-kind="item.is_dir ? 'folder' : 'file'"
+              :title="item.path"
+              @mousedown.prevent
+              @mouseenter="fileSelected = index"
+              @click="chooseFile(index)"
             >
-              <path
-                v-if="item.is_dir"
-                d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"
-              />
-              <path
-                v-else
-                d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6"
-              />
-            </svg>
-            <span class="slash-command-name">{{ item.path }}</span>
-          </button>
+              <svg
+                class="grp-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path
+                  v-if="item.is_dir"
+                  d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"
+                />
+                <path
+                  v-else
+                  d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6"
+                />
+              </svg>
+              <span class="grp-main">
+                <span class="grp-path">
+                  <HighlightedText :text="item.path" :positions="item.matched_indexes" />
+                </span>
+                <span v-if="item.snippet" class="ff-snippet" :title="item.snippet">
+                  <span class="ff-snippet-line">{{ item.line }}:</span>
+                  <HighlightedText :text="item.snippet" :positions="item.snippet_matched_indexes" />
+                </span>
+              </span>
+            </button>
+          </div>
+          <div
+            v-if="fileGrepPending && !fileLoading && !fileError"
+            class="ff-grep-pending file-completion-grep-pending"
+            role="status"
+          >
+            Searching file contents…
+          </div>
+          <div
+            v-else-if="!fileLoading && !fileMatches.length && !fileError"
+            class="file-completion-status"
+            role="status"
+          >
+            No matching files or folders
+          </div>
         </div>
         <div
           v-if="showSlashMenu"
@@ -272,16 +317,28 @@
           </svg>
         </button>
         <button
+          v-if="recordingSubmission && !recordingActive"
+          type="button"
+          class="btn btn-secondary"
+          data-testid="recording-pending-cancel-button"
+          @click="closeRecording"
+        >
+          {{ t("cancel") }}
+        </button>
+        <button
           v-if="mediaRecordingAvailable"
           type="button"
-          :disabled="isDisabled || uploadsInProgress > 0"
+          :disabled="!canRecordAudio"
+          :aria-busy="!!recordingSubmission && !recordingActive"
           class="message-voice-btn"
           :aria-label="t('recordingTitle')"
+          :title="`${t('recordingTitle')} (${menuShortcutLabel('recordAudio')})`"
           data-testid="voice-button"
-          @click="beginRecording"
+          @click="beginRecording('microphone')"
         >
+          <span v-if="recordingSubmission && !recordingActive" class="spinner spinner-small" />
           <svg
-            v-if="screenRecordingAvailable"
+            v-else-if="screenRecordingAvailable"
             fill="none"
             stroke="currentColor"
             stroke-width="1.8"
@@ -453,10 +510,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, useId, watch } from "vue";
 import { useFileCompletion } from "../composables/fileCompletion";
 import { useI18n } from "../composables/i18n";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
+import HighlightedText from "./HighlightedText.vue";
 import type { ContextUsageLevel } from "../../utils/contextUsage";
 import { SLASH_COMMANDS, slashCommandsForConversation } from "../../utils/slashCommands";
 import {
@@ -467,6 +525,8 @@ import {
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
 import RecordingPanel from "./RecordingPanel.vue";
+import type { RecordingDestination, RecordingMode } from "./recordingDestination";
+import { menuShortcutLabel } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -485,14 +545,18 @@ interface Attachment {
   error?: string;
 }
 
+interface AttachmentSession {
+  attachments: Attachment[];
+}
+
 const props = withDefaults(
   defineProps<{
     /** Async send handler (awaited). Mirrors React's onSend prop. */
     onSend: (message: string) => Promise<void> | void;
-    /** Called once the server has assembled the finished media file. The
-     * second argument is the pre-existing composer text plus ready attachments,
-     * which become part of the durable transcribed user turn. */
-    onRecordingComplete: (path: string, context: string) => Promise<void>;
+    /** Reserve the original destination before acquiring media. */
+    onStartRecording: (text: string) => Promise<RecordingDestination>;
+    /** Archived conversations hide the composer, but not an active recording. */
+    recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
     /** Async compaction handler (awaited). When provided, the send-options
@@ -519,18 +583,9 @@ const props = withDefaults(
      * draft-change emit instead. */
     draftSeed?: { value: string } | null;
     initialRows?: number;
-    /** Id of the focused conversation. MessageInput is intentionally NOT keyed
-     * by this in the parent (remounting would break the first-message
-     * conversationId flip), so we watch it here to reset per-conversation
-     * transient state — chiefly pending attachments — that React got for free
-     * via its keyed remount. Without this, a file attached but not sent in one
-     * conversation would be carried into (and sent to) the next. */
+    /** Id of the focused conversation, used to scope pending attachments. */
     conversationId?: string | null;
-    /** Id of a lazily-created draft for the *current* input session. When a
-     * new conversation auto-saves a draft, conversationId flips null→draftId
-     * mid-typing; that is the same session, not a switch, so we must NOT clear
-     * attachments. React encodes this exact carve-out in its key:
-     * `(conversationId === lazyDraftId ? null : conversationId) || "new"`. */
+    /** Id assigned while the current new-conversation session is being saved. */
     lazyDraftId?: string | null;
     /** Ready models (id + reasoning capabilities), used to autocomplete the
      * /model command arguments with only the levels the target model accepts. */
@@ -544,6 +599,7 @@ const props = withDefaults(
     isChildConversation?: boolean;
   }>(),
   {
+    recordingInlineAvailable: true,
     showQueueOption: false,
     canQueue: false,
     autoQueue: false,
@@ -572,13 +628,23 @@ const canCompact = computed(() => props.onCompact !== undefined && !props.autoQu
 const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
-const recordingActive = ref(false);
 type RecordingSubmission = {
+  mode: RecordingMode;
+  screen?: Promise<MediaStream>;
+  destination?: RecordingDestination;
   message: string;
   context: string;
   attachmentIDs: string[];
+  attachmentSession: AttachmentSession;
 };
-const recordingSubmission = ref<RecordingSubmission | null>(null);
+const recordingSubmission = shallowRef<RecordingSubmission | null>(null);
+const recordingActive = computed(() => !!recordingSubmission.value?.destination);
+const recordingFloating = computed(
+  () =>
+    recordingActive.value &&
+    (props.conversationId !== recordingSubmission.value?.destination?.conversationId ||
+      !props.recordingInlineAvailable),
+);
 // setMessage mirrors the React controlled-value path: surfaces every change via
 // draft-change so the parent can persist it.
 function setMessage(next: string | ((prev: string) => string)) {
@@ -592,12 +658,15 @@ function setMessage(next: string | ((prev: string) => string)) {
 watch(
   () => props.draftSeed,
   (seed) => {
-    if (seed != null && !recordingActive.value) message.value = seed.value;
+    if (seed != null) message.value = seed.value;
   },
 );
 
 const submitting = ref(false);
-const attachments = ref<Attachment[]>([]);
+const attachmentSessions = new Map<string | null, AttachmentSession>();
+let activeAttachmentSession: AttachmentSession = { attachments: [] };
+attachmentSessions.set(props.conversationId ?? null, activeAttachmentSession);
+const attachments = ref<Attachment[]>(activeAttachmentSession.attachments);
 const uploadsInProgress = computed(
   () => attachments.value.filter((a) => a.status === "uploading").length,
 );
@@ -643,34 +712,86 @@ function handleResize() {
   isSmallScreen.value = window.innerWidth < 480;
 }
 
-function beginRecording() {
-  recordingSubmission.value = {
+const canRecordAudio = computed(
+  () => mediaRecordingAvailable && props.recordingInlineAvailable && !isDisabled.value &&
+    !submitting.value && uploadsInProgress.value === 0 && !recordingSubmission.value,
+);
+const canRecordScreen = computed(() => canRecordAudio.value && screenRecordingAvailable);
+
+defineExpose({ canRecordAudio, canRecordScreen, beginRecording });
+
+// Before the panel mounts, the composer owns the requested screen stream.
+function releasePendingScreen(submission: RecordingSubmission) {
+  if (submission.destination || !submission.screen) return;
+  void submission.screen.then(
+    (stream) => stream.getTracks().forEach((track) => track.stop()),
+    () => {}, // A rejected picker owns no media.
+  );
+  submission.screen = undefined;
+}
+
+async function beginRecording(mode: RecordingMode) {
+  if (!(mode === "screen" ? canRecordScreen.value : canRecordAudio.value)) return;
+  const submission: RecordingSubmission = {
+    mode,
     message: message.value,
     context: composeMessageWithAttachments(message.value),
     attachmentIDs: readyAttachments.value.map(({ id }) => id),
+    attachmentSession: activeAttachmentSession,
   };
-  recordingActive.value = true;
+  recordingSubmission.value = submission;
+  try {
+    if (mode === "screen") {
+      // Keep the picker in the initiating key/click handler, before draft I/O.
+      submission.screen = navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      // The panel presents picker failures after the destination is ready.
+      void submission.screen.catch(() => {});
+    }
+    const destination = await props.onStartRecording(submission.message);
+    if (recordingSubmission.value !== submission) {
+      releasePendingScreen(submission);
+      return;
+    }
+    // A new draft may have finished creating after navigation away from /new.
+    if (attachmentSessions.get(null) === submission.attachmentSession) {
+      attachmentSessions.delete(null);
+    }
+    attachmentSessions.set(destination.conversationId, submission.attachmentSession);
+    recordingSubmission.value = { ...submission, destination };
+  } catch {
+    // The parent surfaces destination-creation errors. Release any selected screen.
+    releasePendingScreen(submission);
+    if (recordingSubmission.value === submission) recordingSubmission.value = null;
+    if (![...attachmentSessions.values()].includes(submission.attachmentSession)) {
+      clearAttachments(submission.attachmentSession);
+    }
+  }
 }
 
 function handleRecordingComplete(path: string) {
   const submission = recordingSubmission.value;
-  if (!submission) throw new Error("recording completed without preserved composer state");
-  // On failure the parent surfaces the error and the composer keeps its text
-  // and attachments so the user can retry.
-  void props
-    .onRecordingComplete(path, submission.context)
+  if (!submission?.destination) throw new Error("recording completed without a destination");
+  // On failure retain the source draft and attachments. The parent surfaces
+  // the uploaded media path and original destination for recovery.
+  const destination = submission.destination;
+  void destination.complete(path, submission.context)
     .then(() => {
-      if (message.value === submission.message) setMessage("");
-      for (const id of submission.attachmentIDs) removeAttachment(id);
+      if (props.conversationId === destination.conversationId && message.value === submission.message) {
+        setMessage("");
+      }
+      for (const id of submission.attachmentIDs) {
+        removeAttachment(id, submission.attachmentSession);
+      }
     })
     .catch(() => {});
 }
 
 async function closeRecording() {
-  recordingActive.value = false;
+  const wasInline = !recordingFloating.value;
+  if (recordingSubmission.value) releasePendingScreen(recordingSubmission.value);
   recordingSubmission.value = null;
   await nextTick();
-  textareaRef.value?.focus();
+  if (wasInline) textareaRef.value?.focus();
 }
 
 // Close queue menu on click outside
@@ -693,13 +814,14 @@ watch(
 );
 
 async function uploadFile(file: File) {
+  const session = activeAttachmentSession;
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const isImage = file.type.startsWith("image/");
   const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
-  attachments.value = [
-    ...attachments.value,
+  updateAttachments(session, (current) => [
+    ...current,
     { id, name: file.name, isImage, previewUrl, status: "uploading" },
-  ];
+  ]);
 
   try {
     const formData = new FormData();
@@ -721,22 +843,30 @@ async function uploadFile(file: File) {
       throw new Error(`Upload failed: ${msg}`);
     }
     const data = await response.json();
-    attachments.value = attachments.value.map((a) =>
-      a.id === id ? { ...a, status: "ready", path: data.path } : a,
+    updateAttachments(session, (current) =>
+      current.map((a) => (a.id === id ? { ...a, status: "ready", path: data.path } : a)),
     );
   } catch (error) {
     console.error("Failed to upload file:", error);
     const msg = error instanceof Error ? error.message : "unknown error";
-    attachments.value = attachments.value.map((a) =>
-      a.id === id ? { ...a, status: "error", error: msg } : a,
+    updateAttachments(session, (current) =>
+      current.map((a) => (a.id === id ? { ...a, status: "error", error: msg } : a)),
     );
   }
 }
 
-function removeAttachment(id: string) {
-  const found = attachments.value.find((a) => a.id === id);
+function updateAttachments(
+  session: AttachmentSession,
+  update: (current: Attachment[]) => Attachment[],
+) {
+  session.attachments = update(session.attachments);
+  if (session === activeAttachmentSession) attachments.value = session.attachments;
+}
+
+function removeAttachment(id: string, session = activeAttachmentSession) {
+  const found = session.attachments.find((a) => a.id === id);
   if (found?.previewUrl) URL.revokeObjectURL(found.previewUrl);
-  attachments.value = attachments.value.filter((a) => a.id !== id);
+  updateAttachments(session, (current) => current.filter((a) => a.id !== id));
 }
 
 /** Compose final message text by appending `[path]` tokens for ready attachments. */
@@ -747,30 +877,33 @@ function composeMessageWithAttachments(text: string): string {
   return trimmed.length > 0 ? `${trimmed} ${tokens}` : tokens;
 }
 
-function clearAttachments() {
-  attachments.value.forEach((a) => {
+function clearAttachments(session = activeAttachmentSession) {
+  session.attachments.forEach((a) => {
     if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   });
-  attachments.value = [];
+  updateAttachments(session, () => []);
 }
 
-// Reset pending attachments when the focused conversation changes. React gets
-// this for free by keying MessageInput on conversationId (the keyed remount
-// throws away component state); Vue keeps a single instance alive across
-// switches, so without this an unsent attachment would leak into — and be sent
-// to — the next conversation.
-//
-// Mirror React's key carve-out for lazy drafts: when a brand-new conversation
-// auto-saves a draft, conversationId flips null→draftId mid-typing. That is the
-// same input session (React keeps the key "new", so no remount), and the user
-// may have already attached a file they're about to send — don't clear it.
 watch(
   () => props.conversationId,
-  (newId) => {
-    if (newId != null && newId === props.lazyDraftId) return;
-    recordingActive.value = false;
-    recordingSubmission.value = null;
-    if (attachments.value.length > 0) clearAttachments();
+  (newId, oldId) => {
+    const key = newId ?? null;
+    if (newId != null && newId === props.lazyDraftId) {
+      attachmentSessions.delete(oldId ?? null);
+      attachmentSessions.set(key, activeAttachmentSession);
+      return;
+    }
+
+    if (oldId == null && newId != null) {
+      const abandoned = attachmentSessions.get(null);
+      if (abandoned && abandoned !== recordingSubmission.value?.attachmentSession) {
+        clearAttachments(abandoned);
+      }
+      attachmentSessions.delete(null);
+    }
+    activeAttachmentSession = attachmentSessions.get(key) ?? { attachments: [] };
+    attachmentSessions.set(key, activeAttachmentSession);
+    attachments.value = activeAttachmentSession.attachments;
   },
 );
 
@@ -883,6 +1016,7 @@ const {
   matches: fileMatches,
   selected: fileSelected,
   loading: fileLoading,
+  grepPending: fileGrepPending,
   error: fileError,
   focused: fileFocused,
   updateSelection: updateFileSelection,
@@ -1141,6 +1275,7 @@ async function handleSubmit(e: Event) {
     }
 
     const messageToSend = composeMessageWithAttachments(message.value);
+    const attachmentSession = activeAttachmentSession;
     // Pause autosave before awaiting onSend so a trailing PUT can't race the
     // chat POST. Don't clear the draft yet — if send fails the textarea stays.
     emit("draft-send-started");
@@ -1149,9 +1284,9 @@ async function handleSubmit(e: Event) {
     submitting.value = true;
     try {
       await props.onSend(messageToSend);
+      clearAttachments(attachmentSession);
       guardComposerClear(origin, composerOrigin, () => {
         setMessage("");
-        clearAttachments();
         emit("draft-cleared");
       });
     } catch {
@@ -1267,14 +1402,14 @@ function handleKeyDown(e: KeyboardEvent) {
       return;
     }
     if (
-      (fileLoading.value || fileMatches.value.length > 0) &&
+      (fileLoading.value || fileGrepPending.value || fileMatches.value.length > 0) &&
       !e.shiftKey &&
       !e.ctrlKey &&
       !e.metaKey &&
       (e.key === "Enter" || e.key === "Tab")
     ) {
-      // Don't accidentally send while results are loading; settled empty/error
-      // searches leave normal typing, submission and focus navigation alone.
+      // Don't accidentally send while either search phase is loading; settled
+      // empty/error searches leave normal typing, submission and focus navigation alone.
       e.preventDefault();
       void chooseFile(fileSelected.value);
       return;
@@ -1390,6 +1525,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  if (recordingSubmission.value) releasePendingScreen(recordingSubmission.value);
+  recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.removeEventListener("resize", handleViewportResize);
@@ -1397,8 +1534,6 @@ onUnmounted(() => {
   document.removeEventListener("mousedown", onQueueMenuOutside);
   document.removeEventListener("mousedown", onSlashMenuOutside);
   document.removeEventListener("mousedown", onFileMenuOutside);
-  attachments.value.forEach((a) => {
-    if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-  });
+  for (const session of new Set(attachmentSessions.values())) clearAttachments(session);
 });
 </script>

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +104,7 @@ type Built struct {
 	ID          string
 	DisplayName string
 	Provider    Provider
+	Mode        string
 	Source      string // human-readable origin ("exe.dev gateway", "$ANTHROPIC_API_KEY", "custom", ...)
 	Tags        string
 	ReleaseDate string // ISO date from models.dev; empty when unknown
@@ -120,11 +122,22 @@ type Built struct {
 	BaseURL string
 }
 
+// TranscriptionModel is a known OpenAI-compatible transcription route.
+type TranscriptionModel struct {
+	Model    string
+	Endpoint string
+	APIKey   string
+	Source   string
+}
+
 // Config holds runtime configuration for the Manager. Built-in models
 // are passed in pre-materialized; custom models are loaded from DB.
 type Config struct {
 	// Models is the set of ready-to-use built-in models, in display order.
 	Models []Built
+
+	// TranscriptionModels are non-chat models discovered from integrations.
+	TranscriptionModels []TranscriptionModel
 
 	Logger *slog.Logger
 
@@ -171,7 +184,11 @@ func oaiResponsesSvc(model oai.Model) func(baseURL, apiKey string, httpc *http.C
 
 func oaiResponsesSvcNamed(model oai.Model, providerName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
 	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
-		s := &oai.ResponsesService{Model: model, APIKey: apiKey, HTTPC: httpc, MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: providerName}
+		s := &oai.ResponsesService{
+			Model: model, APIKey: apiKey, HTTPC: httpc,
+			MaxTokens:     outputLimit(baseURL, model.URL, model.ModelName),
+			ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: providerName,
+		}
 		if baseURL != "" {
 			s.ModelURL = baseURL + "/v1"
 		}
@@ -181,7 +198,10 @@ func oaiResponsesSvcNamed(model oai.Model, providerName string) func(baseURL, ap
 
 func oaiChatSvc(model oai.Model, providerName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
 	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
-		s := &oai.Service{Model: model, APIKey: apiKey, HTTPC: httpc, MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ProviderName: providerName}
+		s := &oai.Service{
+			Model: model, APIKey: apiKey, HTTPC: httpc,
+			MaxTokens: outputLimit(baseURL, model.URL, model.ModelName), ProviderName: providerName,
+		}
 		if baseURL != "" {
 			s.ModelURL = baseURL + "/v1"
 		}
@@ -281,10 +301,16 @@ func All() []Model {
 			Build: antSvc(ant.Claude46Opus),
 		},
 		{
-			ID: "glm-5.2-fireworks", Provider: ProviderFireworks,
-			Description: "GLM-5.2 on Fireworks", APIModelName: oai.GLM52Fireworks.ModelName,
+			ID: "glm-5.3-fireworks", Provider: ProviderFireworks,
+			Description: "GLM-5.3 on Fireworks", APIModelName: oai.GLM53Fireworks.ModelName,
 			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
-			Build: oaiChatSvc(oai.GLM52Fireworks, "fireworks"),
+			Build: oaiChatSvc(oai.GLM53Fireworks, "fireworks"),
+		},
+		{
+			ID: "glm-5.3-flash-fireworks", Provider: ProviderFireworks,
+			Description: "GLM-5.3 Flash on Fireworks", APIModelName: oai.GLM53FlashFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.GLM53FlashFireworks, "fireworks"),
 		},
 		{
 			ID: "gemini-3.1-pro", Provider: ProviderGemini,
@@ -407,6 +433,12 @@ func All() []Model {
 			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},
 		{
+			ID: "glm-5.2-fireworks", Provider: ProviderFireworks,
+			Description: "GLM-5.2 on Fireworks", APIModelName: oai.GLM52Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.GLM52Fireworks, "fireworks"),
+		},
+		{
 			ID: "predictable", Provider: ProviderBuiltIn,
 			Description:    "Deterministic test model (no API key)",
 			APIType:        APITypeBuiltIn,
@@ -448,12 +480,13 @@ func Default() Model {
 
 // Manager owns the live set of LLM services for a Shelley server.
 type Manager struct {
-	mu         sync.RWMutex
-	services   map[string]serviceEntry
-	modelOrder []string
-	logger     *slog.Logger
-	db         *db.DB
-	httpc      *http.Client
+	mu                  sync.RWMutex
+	services            map[string]serviceEntry
+	modelOrder          []string
+	transcriptionModels []TranscriptionModel
+	logger              *slog.Logger
+	db                  *db.DB
+	httpc               *http.Client
 }
 
 // GetWorkhorseService returns a service that uses a cheap model from the
@@ -466,6 +499,7 @@ type serviceEntry struct {
 	service     llm.Service
 	provider    Provider
 	modelID     string
+	mode        string
 	source      string
 	displayName string
 	tags        string
@@ -577,10 +611,11 @@ func NewManager(cfg *Config) (*Manager, error) {
 		httpc = llmhttp.NewClient(nil)
 	}
 	m := &Manager{
-		services: map[string]serviceEntry{},
-		logger:   cfg.Logger,
-		db:       cfg.DB,
-		httpc:    httpc,
+		services:            map[string]serviceEntry{},
+		transcriptionModels: append([]TranscriptionModel(nil), cfg.TranscriptionModels...),
+		logger:              cfg.Logger,
+		db:                  cfg.DB,
+		httpc:               httpc,
 	}
 
 	m.registerBuiltModelsLocked(cfg.Models)
@@ -601,6 +636,7 @@ func (m *Manager) registerBuiltModelsLocked(built []Built) {
 			service:      b.Service,
 			provider:     b.Provider,
 			modelID:      b.ID,
+			mode:         b.Mode,
 			source:       b.Source,
 			displayName:  dn,
 			tags:         b.Tags,
@@ -721,6 +757,35 @@ func (m *Manager) GetAvailableModels() []string {
 	return result
 }
 
+// GetTranscriptionModels returns known routes for an exact wire model name.
+func (m *Manager) GetTranscriptionModels(modelName string) ([]TranscriptionModel, error) {
+	m.mu.RLock()
+	var result []TranscriptionModel
+	for _, model := range m.transcriptionModels {
+		if model.Model == modelName {
+			result = append(result, model)
+		}
+	}
+	m.mu.RUnlock()
+
+	dbModels, err := m.customModelRows()
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range dbModels {
+		if model.ModelName != modelName || (model.ProviderType != "openai" && model.ProviderType != "openai-responses") {
+			continue
+		}
+		result = append(result, TranscriptionModel{
+			Model:    model.ModelName,
+			Endpoint: strings.TrimSuffix(model.Endpoint, "/") + "/audio/transcriptions",
+			APIKey:   model.ApiKey,
+			Source:   SourceCustomLabel,
+		})
+	}
+	return result, nil
+}
+
 func (m *Manager) HasModel(modelID string) bool {
 	m.mu.RLock()
 	_, ok := m.services[modelID]
@@ -732,6 +797,7 @@ func (m *Manager) HasModel(modelID string) bool {
 type ModelInfo struct {
 	DisplayName string
 	Provider    Provider
+	Mode        string
 	Tags        string
 	Source      string
 	ReleaseDate string
@@ -749,7 +815,7 @@ func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	if !ok {
 		return nil
 	}
-	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
+	return &ModelInfo{DisplayName: entry.displayName, Provider: entry.provider, Mode: entry.mode, Tags: entry.tags, Source: entry.source, ReleaseDate: entry.releaseDate, BaseURL: entry.baseURL, APIType: string(entry.apiType), APIModelName: entry.apiModelName}
 }
 
 type reasoningMapping struct {
@@ -885,6 +951,7 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			HTTPC:           m.httpc,
 			ProviderName:    "openai",
 			ReasoningEffort: model.ReasoningEffort,
+			ReasoningReplay: oai.ReasoningReplay(model.ReasoningReplay),
 		}
 	case "openai-responses":
 		service = &oai.ResponsesService{
@@ -904,6 +971,7 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			ThinkingLevel:   llm.ThinkingLevelMedium,
 			ReasoningEffort: model.ReasoningEffort,
 			ProviderName:    "openai",
+			ReasoningReplay: oai.ReasoningReplay(model.ReasoningReplay),
 		}
 	case "gemini":
 		service = &gem.Service{

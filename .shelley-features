@@ -1,4 +1,2 @@
-# Feature branches to merge into custom, in order. Branches live on the fork.
-# Removing a line stops future updates; it does not undo previously merged code.
-file-name-completion
-mobile-keyboard-input
+# No fork application features: both contributions have landed upstream.
+# Application source follows upstream; retain only fork maintenance/provisioning.

@@ -68,20 +68,18 @@ If the command does not finish within yield_time_seconds, this tool returns
 the output so far, the PID, and the log file path; the process keeps running
 in the background.
 
-For long-lived processes (servers, watchers), prefer tmux.
+For long-lived processes (servers, watchers), prefer tmux and/or systemd.
 
-To wake yourself later (longer than the max yield), detach a tmux session that
-sleeps then calls the Shelley client. Use double quotes so THIS shell expands
-$SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
-  tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+For delayed wakeups or scheduled tasks, use the schedule skill.
 
 Destructive commands (deleting .git, home dirs, broad wildcards) require
 explicit paths and user confirmation.
 
-Keep commands under 60k tokens; for complex scripts, write a file and run it.
+Keep commands under a dozen lines, excluding file contents. For complex scripts,
+write a file and run it; both can share one call.
 
-Don't pipe to head/tail/sed -n just to truncate output; the tool already tails
-on yield and otherwise returns it in full. Filter only when targeting a
+Don't pipe to head/tail/sed just to shorten output; this already tails
+on yield and otherwise returns output in full. Filter only when targeting a
 specific pattern (e.g. grep).
 `
 

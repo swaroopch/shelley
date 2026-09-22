@@ -1,11 +1,20 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI, openToolPill } from "./helpers";
+import { testWorkingDirectory } from "./helpers";
+
+// / resumes the shared server's latest conversation. Always start our own,
+// and pin a real cwd rather than inheriting another spec's synthetic path.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(
+    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
+    testWorkingDirectory(),
+  );
+});
 
 // Split out of conversation.spec.ts (see the note there). These cover how tool
-// calls are rendered and coalesced in the transcript; they drive the UI from /
+// calls are rendered and coalesced in the transcript; they drive the UI from /new
 // rather than seeding a conversation via the API.
-test("shows tool result details from its pill", async ({ page }) => {
-  await page.goto("/");
+test("coalesces tool calls - shows tool result with details", async ({ page }) => {
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -20,16 +29,15 @@ test("shows tool result details from its pill", async ({ page }) => {
     timeout: 30000,
   });
 
-  const modal = await openToolPill(page, /hello world/);
-  const details = modal.locator(".bash-tool-details");
-  await expect(details).toBeVisible();
-  await expect(
-    details.locator(".bash-tool-code").filter({ hasText: 'echo "hello world"' }),
-  ).toBeVisible();
+  // Verify the bash tool header is visible
+  await expect(page.locator(".bash-tool-header").first()).toBeVisible();
+
+  // Verify bash tool shows command
+  await expect(page.locator(".bash-tool-command").first()).toBeVisible();
 });
 
-test("displays agent text and tool pill separately", async ({ page }) => {
-  await page.goto("/");
+test("coalesces tool calls - displays agent text and tool separately", async ({ page }) => {
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -47,12 +55,13 @@ test("displays agent text and tool pill separately", async ({ page }) => {
   // Verify agent message is shown ("I'll run the command: pwd")
   await expect(page.locator("text=I'll run the command: pwd").first()).toBeVisible();
 
-  // Verify tool result is shown separately as a tool pill.
-  await expect(page.locator('.tool-pill[data-tool-name="bash"]').first()).toBeVisible();
+  // Verify tool result is shown separately as coalesced tool call
+  await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible();
+  await expect(page.locator("text=bash").first()).toBeVisible();
 });
 
 test("handles sequential tool calls", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   const messageInput = page.getByTestId("message-input");
@@ -82,8 +91,8 @@ test("handles sequential tool calls", async ({ page }) => {
 });
 
 test("displays LLM error message in UI", async ({ page }) => {
-  // Clear any existing data by navigating to root (which should show empty state)
-  await page.goto("/");
+  // Start a new conversation, not whichever conversation another test last used.
+  await page.goto("/new");
   await page.waitForLoadState("domcontentloaded");
 
   // Wait for the empty state or message input

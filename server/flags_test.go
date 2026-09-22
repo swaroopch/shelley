@@ -6,19 +6,11 @@ import (
 	"shelley.exe.dev/featureflags"
 )
 
-func TestToolPillsFeatureFlagRemoved(t *testing.T) {
-	if _, ok := featureflags.Lookup("tool-pills"); ok {
-		t.Fatal("tool-pills feature flag is still registered")
-	}
-}
-
-func TestFlagReflectionEmojiFaviconRegistered(t *testing.T) {
-	f, ok := featureflags.Lookup("reflection-emoji-favicon")
-	if !ok {
-		t.Fatal("reflection-emoji-favicon not registered")
-	}
-	if f.Default != true {
-		t.Fatalf("default = %v, want true", f.Default)
+func TestRemovedFlagsNotRegistered(t *testing.T) {
+	for _, name := range []string{"tool-pills", "reflection-emoji-favicon"} {
+		if _, ok := featureflags.Lookup(name); ok {
+			t.Errorf("removed flag %q is still registered", name)
+		}
 	}
 }
 

@@ -138,12 +138,14 @@ export interface TranslationKeys {
   attachFile: string;
   sendMessage: string;
   recordingTitle: string;
+  recordingReturn: string;
   recordingStop: string;
   recordingStopTranscription: string;
   recordingStarting: string;
   recordingInProgress: string;
   recordingScreenInProgress: string;
   recordingStopping: string;
+  recordingTooShort: string;
   recordingFailed: string;
   recordingInvalidResponse: string;
   recordingScreenAction: string;
@@ -209,6 +211,11 @@ export interface TranslationKeys {
   reasoningSupportYes: string;
   reasoningSupportNo: string;
   reasoningSupportHelp: string;
+  reasoningReplay: string;
+  reasoningReplayAuto: string;
+  reasoningReplayNone: string;
+  reasoningReplayHelp: string;
+  reasoningReplayAutoResolved: string;
   reasoningLevelMapping: string;
   reasoningMappingUnsupported: string;
   reasoningMappingHelp: string;

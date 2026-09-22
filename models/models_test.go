@@ -15,6 +15,7 @@ import (
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/db/generated"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/llm/oai"
 	"shelley.exe.dev/llm/predictable"
 	"shelley.exe.dev/models/modelsdev"
 )
@@ -61,6 +62,8 @@ func TestByID(t *testing.T) {
 		{id: "gpt-5.5", wantID: "gpt-5.5"},
 		{id: "gpt-5.5-pro", wantNil: true},
 		{id: "deepseek-v4-pro-fireworks", wantID: "deepseek-v4-pro-fireworks"},
+		{id: "glm-5.3-fireworks", wantID: "glm-5.3-fireworks"},
+		{id: "glm-5.3-flash-fireworks", wantID: "glm-5.3-flash-fireworks"},
 		{id: "deepseek-v4.1-flash-fireworks", wantID: "deepseek-v4.1-flash-fireworks"},
 		{id: "gpt-5.3-codex", wantID: "gpt-5.3-codex"},
 		{id: "claude-opus-5", wantID: "claude-opus-5"},
@@ -784,7 +787,91 @@ func TestRefreshBuiltModelsReplacesBuiltModelsAndPreservesCustomModels(t *testin
 	}
 }
 
+func TestGetTranscriptionModelsIncludesIntegrationAndCustomRoutes(t *testing.T) {
+	testDB, err := db.New(db.Config{DSN: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer testDB.Close()
+	if err := testDB.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.CreateModel(t.Context(), generated.CreateModelParams{
+		ModelID:      "custom-transcription-model",
+		DisplayName:  "Transcription Model",
+		ProviderType: "openai",
+		Endpoint:     "https://api.example.com/v1",
+		ApiKey:       "transcription-key",
+		ModelName:    "gpt-transcribe",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr, err := NewManager(&Config{
+		TranscriptionModels: []TranscriptionModel{{
+			Model:    "gpt-transcribe",
+			Endpoint: "https://llm.int.exe.xyz/v1/audio/transcriptions",
+			Source:   "llm.int.exe.xyz",
+		}},
+		DB: testDB,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mgr.GetTranscriptionModels("gpt-transcribe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("transcription models = %+v, want integration and custom routes", got)
+	}
+	if got[0].Endpoint != "https://llm.int.exe.xyz/v1/audio/transcriptions" {
+		t.Fatalf("integration route = %+v", got[0])
+	}
+	if got[1].Endpoint != "https://api.example.com/v1/audio/transcriptions" || got[1].APIKey != "transcription-key" {
+		t.Fatalf("custom route = %+v", got[1])
+	}
+}
+
 func (m *mockLLMService) SupportsImages() bool { return true }
+
+func TestManagerLoadsCustomReasoningReplayOverride(t *testing.T) {
+	testDB, err := db.New(db.Config{DSN: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer testDB.Close()
+	if err := testDB.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.CreateModel(t.Context(), generated.CreateModelParams{
+		ModelID: "replay-model", DisplayName: "Replay model", ProviderType: "openai",
+		Endpoint: "https://proxy.example/v1", ApiKey: "key", ModelName: "custom-model",
+		ReasoningReplay: string(oai.ReasoningReplayContent),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManager(&Config{DB: testDB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := manager.GetService("replay-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, ok := service.(*reasoningService)
+	if !ok {
+		t.Fatalf("service type = %T", service)
+	}
+	chat, ok := wrapped.Service.(*oai.Service)
+	if !ok {
+		t.Fatalf("inner service type = %T", wrapped.Service)
+	}
+	if chat.ReasoningReplay != oai.ReasoningReplayContent {
+		t.Fatalf("reasoning replay = %q", chat.ReasoningReplay)
+	}
+}
 
 func TestReasoningServiceMapping(t *testing.T) {
 	inner := &captureThinkingService{}

@@ -1,5 +1,5 @@
 <!-- Inline recording takeover for the message composer. Starts with the
-     microphone immediately, buffers one-second chunks, and can discard and
+     requested media immediately, buffers one-second chunks, and can discard and
      restart the capture with screen/window video plus microphone audio. -->
 <template>
   <div
@@ -18,8 +18,11 @@
         data-testid="recording-preview"
       />
       <div
-        v-if="state === 'recording'"
-        class="recording-waveform"
+        v-if="state === 'preroll' || state === 'recording'"
+        :class="[
+          'recording-waveform',
+          { 'recording-waveform-preroll': state === 'preroll' },
+        ]"
         aria-hidden="true"
         data-testid="recording-waveform"
       >
@@ -53,7 +56,7 @@
           data-testid="recording-preserved-text"
         >{{ preservedText }}</span>
         <time
-          v-if="state === 'recording' || state === 'stopping'"
+          v-if="state === 'preroll' || state === 'recording' || state === 'stopping'"
           class="recording-timer"
           data-testid="recording-timer"
           :datetime="`PT${Math.floor(elapsedMs / 1000)}S`"
@@ -78,7 +81,7 @@
         <span class="recording-action-label">{{ t("recordingScreenAction") }}</span>
       </button>
       <button
-        v-if="state === 'recording'"
+        v-if="state === 'preroll' || state === 'recording'"
         type="button"
         class="btn btn-primary recording-stop-btn"
         :aria-label="t('recordingStop')"
@@ -120,11 +123,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "../composables/i18n";
+import type { RecordingMode } from "./recordingDestination";
 
-type RecordingMode = "microphone" | "screen";
-type RecordingState = "starting" | "recording" | "stopping" | "error";
+type RecordingState = "starting" | "preroll" | "recording" | "stopping" | "error";
 
 const props = defineProps<{
+  initialMode: RecordingMode;
+  initialScreen?: Promise<MediaStream>;
   preservedText?: string;
   onComplete: (path: string) => void;
 }>();
@@ -133,7 +138,7 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 
-const mode = ref<RecordingMode>("microphone");
+const mode = ref<RecordingMode>(props.initialMode);
 const state = ref<RecordingState>("starting");
 const errorMessage = ref("");
 const elapsedMs = ref(0);
@@ -142,6 +147,7 @@ const previewElement = ref<HTMLVideoElement | null>(null);
 const waveformLevels = ref<number[]>(Array.from({ length: 16 }, () => 0.15));
 const screenCaptureAvailable =
   typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+const minimumEncodedRecordingBytes = 8;
 
 let microphoneStream: MediaStream | null = null;
 let recordingStream: MediaStream | null = null;
@@ -154,6 +160,8 @@ let recorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let startedAt = 0;
 let timerId: number | null = null;
+let prerollTimerId: number | null = null;
+let resolvePreroll: (() => void) | null = null;
 let requestController: AbortController | null = null;
 let resolveRecorderStop: (() => void) | null = null;
 let recorderStopPromise: Promise<void> | null = null;
@@ -163,7 +171,7 @@ let failureInProgress = false;
 
 const statusText = computed(() => {
   if (state.value === "starting") return t("recordingStarting");
-  if (state.value === "recording") {
+  if (state.value === "preroll" || state.value === "recording") {
     return mode.value === "screen" ? t("recordingScreenInProgress") : t("recordingInProgress");
   }
   if (state.value === "stopping") return t("recordingStopping");
@@ -211,9 +219,15 @@ function startAudioMeter(stream: MediaStream) {
   const draw = () => {
     if (meterAnalyser !== analyser) return;
     analyser.getByteTimeDomainData(samples);
-    waveformLevels.value = waveformLevels.value.map((_, index, levels) => {
-      const sample = samples[Math.floor((index / levels.length) * samples.length)] ?? 128;
-      return Math.max(0.12, Math.min(1, Math.abs(sample - 128) / 42));
+    waveformLevels.value = waveformLevels.value.map((level, index, levels) => {
+      const start = Math.floor((index / levels.length) * samples.length);
+      const end = Math.floor(((index + 1) / levels.length) * samples.length);
+      let peak = 0;
+      for (let sampleIndex = start; sampleIndex < end; sampleIndex++) {
+        peak = Math.max(peak, Math.abs((samples[sampleIndex] ?? 128) - 128));
+      }
+      const target = Math.max(0.1, Math.min(1, Math.pow(peak / 128, 0.65) * 2.3));
+      return target >= level ? target : Math.max(0.1, level * 0.8 + target * 0.2);
     });
     meterFrame = requestAnimationFrame(draw);
   };
@@ -238,7 +252,27 @@ function stopTimer() {
   updateElapsed();
 }
 
+function cancelPreroll() {
+  if (prerollTimerId !== null) window.clearTimeout(prerollTimerId);
+  prerollTimerId = null;
+  const resolve = resolvePreroll;
+  resolvePreroll = null;
+  resolve?.();
+}
+
+function waitForPreroll(): Promise<void> {
+  return new Promise((resolve) => {
+    resolvePreroll = resolve;
+    prerollTimerId = window.setTimeout(() => {
+      prerollTimerId = null;
+      resolvePreroll = null;
+      resolve();
+    }, 500);
+  });
+}
+
 async function cleanupMedia() {
+  cancelPreroll();
   stopTimer();
   stopAudioMeter();
   const tracks = new Set<MediaStreamTrack>();
@@ -294,13 +328,7 @@ async function responseError(response: Response, action: string): Promise<Error>
   return new Error(`${action}: ${detail}`);
 }
 
-async function createScreenStream(selectedScreen?: MediaStream): Promise<MediaStream> {
-  const screen =
-    selectedScreen ?? (await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }));
-  displayStream.value = screen;
-  screen.getVideoTracks()[0]?.addEventListener("ended", onDisplayEnded, { once: true });
-  if (discarding) throw new DOMException("Recording cancelled", "AbortError");
-
+async function createScreenStream(screen: MediaStream): Promise<MediaStream> {
   microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   if (discarding) throw new DOMException("Recording cancelled", "AbortError");
 
@@ -317,17 +345,21 @@ async function createScreenStream(selectedScreen?: MediaStream): Promise<MediaSt
   return new MediaStream([...screen.getVideoTracks(), ...microphoneTracks]);
 }
 
-async function createRecordingStream(
-  recordingMode: RecordingMode,
-  selectedScreen?: MediaStream,
-): Promise<MediaStream> {
-  if (recordingMode === "screen") return createScreenStream(selectedScreen);
+async function createRecordingStream(recordingMode: RecordingMode): Promise<MediaStream> {
+  if (recordingMode === "screen") return createScreenStream(displayStream.value!);
   microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   return microphoneStream;
 }
 
+function afterNextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => window.setTimeout(resolve, 0));
+  });
+}
+
 function collectChunk(blob: Blob) {
-  if (blob.size > 0) recordedChunks.push(blob);
+  if (blob.size === 0) return;
+  recordedChunks.push(blob);
 }
 
 async function stopRecorder() {
@@ -365,11 +397,14 @@ async function presentFailure(error: Error) {
 }
 
 function onDisplayEnded() {
-  if (state.value === "recording") void stopRecording();
+  if (state.value === "preroll" || state.value === "recording") void stopRecording();
   else if (state.value === "starting") void presentFailure(new Error(t("recordingScreenEnded")));
 }
 
-async function startRecording(recordingMode: RecordingMode, selectedScreen?: MediaStream) {
+async function startRecording(
+  recordingMode: RecordingMode,
+  selectedScreen?: MediaStream | Promise<MediaStream>,
+) {
   mode.value = recordingMode;
   discarding = false;
   errorMessage.value = "";
@@ -379,7 +414,24 @@ async function startRecording(recordingMode: RecordingMode, selectedScreen?: Med
   recordedChunks = [];
 
   try {
-    recordingStream = await createRecordingStream(recordingMode, selectedScreen);
+    if (recordingMode === "screen") {
+      // Initial capture is requested by the composer; retries request it here
+      // before yielding, while still in the Retry button's click handler.
+      displayStream.value = await (
+        selectedScreen ?? navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      );
+      if (discarding || disposed) {
+        await cleanupMedia();
+        return;
+      }
+      const video = displayStream.value.getVideoTracks()[0];
+      if (!video || video.readyState === "ended") throw new Error(t("recordingScreenEnded"));
+      video.addEventListener("ended", onDisplayEnded, { once: true });
+    }
+    await afterNextPaint();
+    if (discarding || disposed) return;
+
+    recordingStream = await createRecordingStream(recordingMode);
     if (discarding || disposed) {
       await cleanupMedia();
       return;
@@ -402,7 +454,11 @@ async function startRecording(recordingMode: RecordingMode, selectedScreen?: Med
     };
     recorder.start(1000);
     startedAt = Date.now();
+    state.value = "preroll";
+    await waitForPreroll();
+    if (discarding || disposed || state.value !== "preroll") return;
     timerId = window.setInterval(updateElapsed, 250);
+    updateElapsed();
     state.value = "recording";
   } catch (error) {
     requestController = null;
@@ -445,6 +501,20 @@ async function uploadVideoMetadata(path: string) {
   await uploadRecording(filename, body);
 }
 
+async function validateRecording(recording: Blob, mimeType: string) {
+  if (recording.size < minimumEncodedRecordingBytes) throw new Error(t("recordingTooShort"));
+  if (!mimeType.includes("webm")) return;
+  const header = new Uint8Array(await recording.slice(0, 4).arrayBuffer());
+  if (
+    header[0] !== 0x1a ||
+    header[1] !== 0x45 ||
+    header[2] !== 0xdf ||
+    header[3] !== 0xa3
+  ) {
+    throw new Error(t("recordingTooShort"));
+  }
+}
+
 function handleStopPointerDown(event: PointerEvent) {
   if (event.pointerType === "mouse") return;
   event.preventDefault();
@@ -452,13 +522,15 @@ function handleStopPointerDown(event: PointerEvent) {
 }
 
 async function stopRecording() {
-  if (state.value !== "recording" || !recorder) return;
+  if ((state.value !== "preroll" && state.value !== "recording") || !recorder) return;
   state.value = "stopping";
   stopTimer();
   const mimeType = recorder.mimeType || "application/octet-stream";
   try {
     await stopRecorder();
+    updateElapsed();
     const recording = new Blob(recordedChunks, { type: mimeType });
+    await validateRecording(recording, mimeType);
     const filename = recordingFilename(extensionForMimeType(mimeType));
     const path = await uploadRecording(filename, recording);
     if (mode.value === "screen") await uploadVideoMetadata(path);
@@ -494,6 +566,7 @@ async function restartWithScreen() {
   state.value = "stopping";
   await discardCapture();
   if (!disposed) await startRecording("screen", screen);
+  else screen.getTracks().forEach((track) => track.stop());
 }
 
 async function retry() {
@@ -508,7 +581,7 @@ async function cancelRecording() {
   if (!disposed) emit("close");
 }
 
-onMounted(() => void startRecording("microphone"));
+onMounted(() => void startRecording(props.initialMode, props.initialScreen));
 
 onBeforeUnmount(() => {
   disposed = true;

@@ -601,50 +601,7 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 	})
 }
 
-// hashString computes a simple hash of a string
-func hashString(s string) uint32 {
-	var hash uint32
-	for _, c := range s {
-		hash = ((hash << 5) - hash) + uint32(c)
-	}
-	return hash
-}
-
-// generateFaviconSVG creates a Cool S favicon with color based on hostname hash
-// Big colored circle background with the Cool S inscribed in white
-func generateFaviconSVG(hostname string) string {
-	hash := hashString(hostname)
-	h := hash % 360
-	bgColor := fmt.Sprintf("hsl(%d, 70%%, 55%%)", h)
-	// White S on colored background - good contrast on any saturated hue
-	strokeColor := "#ffffff"
-
-	// Original Cool S viewBox: 0 0 171 393 (tall rectangle)
-	// Square viewBox 0 0 400 400 with circle, S scaled and centered inside
-	// S dimensions: 171x393, scale 0.97 gives 166x381, centered in 400x400
-	return fmt.Sprintf(
-		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
-<circle cx="200" cy="200" r="200" fill="%s"/>
-<g transform="translate(117 10) scale(0.97)">
-<g stroke-linecap="round"><g transform="translate(13.3 97.5) rotate(0 1.4 42.2)"><path d="M1.28 0.48C1.15 14.67,-0.96 71.95,-1.42 86.14M-1.47-1.73C-0.61 11.51,4.65 66.62,4.21 81.75" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(87.6 97.2) rotate(0 1.2 42.4)"><path d="M-1.42 1.14C-1.89 15.33,-1.41 71.93,-1.52 85.6M3-0.71C3.35 12.53,3.95 66.59,4.06 80.91" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(156.3 91) rotate(0 0.7 42.1)"><path d="M-1.52 0.6C-1.62 14.26,-1.97 68.6,-2.04 83.12M2.86-1.55C3.77 12.32,3.09 71.53,3.26 85.73" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(157.7 230.3) rotate(0 0.6 42.9)"><path d="M-2.04-1.88C-2.11 12.64,-2.52 72.91,-1.93 87.72M2.05 3.27C3.01 17.02,3.68 70.97,3.43 84.18" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(12.6 226.7) rotate(0 0.2 44.3)"><path d="M-1.93 2.72C-1.33 17.52,1.37 73.57,1.54 86.96M2.23 1.72C2.77 15.92,1.05 69.12,0.14 83.02" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(82.8 226.6) rotate(0 -1.1 43.1)"><path d="M1.54 1.96C1.7 15.35,-0.76 69.37,-0.93 83.06M-1.07 0.56C-1.19 15.45,-3.69 71.28,-3.67 85.64" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(152.7 311.8) rotate(0 -32.3 34.6)"><path d="M-0.93-1.94C-12.26 9.08,-55.27 56.42,-66.46 68.08M3.76 3.18C-8.04 14.42,-56.04 59.98,-68.41 71.22" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(14.7 308.2) rotate(0 34.1 33.6)"><path d="M0.54-0.92C12.51 10.75,58.76 55.93,70.91 68.03M-2.62-3.88C8.97 8.35,55.58 59.22,68.08 71.13" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(11.3 178.5) rotate(0 35.7 23.4)"><path d="M-1.09-0.97C10.89 7.63,60.55 42.51,72.41 50.67M3.51-3.96C15.2 4,60.24 37.93,70.94 47.11" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(11.3 223.5) rotate(0 13.4 -10.2)"><path d="M1.41 2.67C6.27-1,23.83-19.1,28.07-23M-1.26 1.66C3.24-1.45,19.69-14.92,25.32-19.37" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(13.3 94.5) rotate(0 34.6 -42.2)"><path d="M-0.93 0C9.64-13.89,53.62-66.83,64.85-80.71M3.76-2.46C15.07-15.91,59.99-71.5,70.08-84.48" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(81.3 12.5) rotate(0 36.1 39.1)"><path d="M-2.15 2.29C10.41 14.58,61.78 62.2,74.43 73.73M1.88 1.07C14.1 13.81,60.32 65.18,71.89 77.21" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(88.3 177.5) rotate(0 31.2 22.9)"><path d="M-0.57-0.27C10.92 7.09,55.6 38.04,66.75 46.48M-4.32-2.89C6.87 4.52,51.07 40.67,63.83 48.74" stroke="%s" stroke-width="14" fill="none"/></g></g>
-<g stroke-linecap="round"><g transform="translate(155.3 174.5) rotate(0 -10.7 13.4)"><path d="M-1.25-2.52C-5.27 2.41,-21.09 24.62,-24.67 29.33M3.26 2.28C0.21 6.4,-14.57 20.81,-19.18 25.04" stroke="%s" stroke-width="14" fill="none"/></g></g>
-</g>
-</svg>`,
-		bgColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor, strokeColor,
-	)
-}
+const defaultFaviconEmoji = "🐚"
 
 func generateEmojiFaviconSVG(emoji string) string {
 	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
@@ -748,21 +705,15 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		return
 	}
 
-	// Generate favicon as data URI
-	// Include the listening port in the hash so demo servers on different ports
-	// get visually distinct favicons.
-	faviconKey := hostname
-	if s.listenPort != 0 {
-		faviconKey = fmt.Sprintf("%s:%d", hostname, s.listenPort)
+	// Use the VM's reflection emoji, or Shelley's universal emoji when
+	// reflection metadata is unavailable (for example, standalone installs).
+	emoji := s.reflectionEmoji(r.Context())
+	if emoji == "" {
+		emoji = defaultFaviconEmoji
 	}
-	faviconSVG := generateFaviconSVG(faviconKey)
-	if s.featureFlagBool(r.Context(), FlagReflectionEmojiFavicon) {
-		if emoji := cachedReflectionEmoji(r.Context()); emoji != "" {
-			faviconSVG = generateEmojiFaviconSVG(emoji)
-		}
-	}
+	faviconSVG := generateEmojiFaviconSVG(emoji)
 	faviconDataURI := "data:image/svg+xml," + url.PathEscape(faviconSVG)
-	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, faviconDataURI)
+	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, html.EscapeString(faviconDataURI))
 
 	// Inject the script tag and favicon before </head>
 	initScript := fmt.Sprintf(`<script>window.__SHELLEY_INIT__=%s;</script>`, initJSON)
@@ -980,6 +931,9 @@ func (s *Server) conversationMux() *http.ServeMux {
 	mux.HandleFunc("POST /{id}/btw/{childID}/summarize", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSummarizeBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
 	})
+	mux.HandleFunc("POST /{id}/btw/{childID}/dismiss", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDismissBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
+	})
 	mux.HandleFunc("POST /{id}/continue", func(w http.ResponseWriter, r *http.Request) {
 		s.handleContinueConversation(w, r, r.PathValue("id"))
 	})
@@ -1104,11 +1058,12 @@ func derefString(p *string) string {
 
 // ChatRequest represents a chat message from the user
 type ChatRequest struct {
-	Message             string                  `json:"message"`
-	Model               string                  `json:"model,omitempty"`
-	Cwd                 string                  `json:"cwd,omitempty"`
-	ConversationOptions *db.ConversationOptions `json:"conversation_options,omitempty"`
-	Queue               bool                    `json:"queue,omitempty"`
+	Message              string                  `json:"message"`
+	Model                string                  `json:"model,omitempty"`
+	Cwd                  string                  `json:"cwd,omitempty"`
+	ConversationOptions  *db.ConversationOptions `json:"conversation_options,omitempty"`
+	Queue                bool                    `json:"queue,omitempty"`
+	SenderConversationID string                  `json:"sender_conversation_id,omitempty"`
 }
 
 // handleChatConversation handles POST /conversation/<id>/chat
@@ -1132,8 +1087,8 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if req.ConversationOptions != nil &&
-		(req.ConversationOptions.Kind != "" || req.ConversationOptions.ParentPointer != nil) {
-		http.Error(w, "kind and parent_pointer are internal conversation options", http.StatusBadRequest)
+		(req.ConversationOptions.Kind != "" || req.ConversationOptions.ParentPointer != nil || req.ConversationOptions.CommitTour != nil) {
+		http.Error(w, "kind, parent_pointer, and commit_tour are internal conversation options", http.StatusBadRequest)
 		return
 	}
 
@@ -1144,6 +1099,13 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		s.logger.Error("Failed to load conversation", "conversationID", conversationID, "error", err)
 		http.Error(w, "Conversation not found", http.StatusNotFound)
+		return
+	}
+
+	senderUserData, err := s.senderUserData(ctx, *existing, req.SenderConversationID)
+	if err != nil {
+		s.logger.Error("Failed to resolve chat sender", "conversationID", conversationID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -1211,6 +1173,14 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// carrier here. Both the immediate-send (recordTurnStartMessage) and queued
 	// (QueueMessage) paths read it off this ctx.
 	ctx = contextWithUserEmail(ctx, userEmail)
+
+	commitTourReasoning := db.ParseConversationOptions(existing.ConversationOptions).ThinkingLevel
+	if commitTourReasoning == "" {
+		commitTourReasoning = llm.ServiceDefaultReasoningLevel(llmService)
+	}
+	if s.handleCommitTourCommand(ctx, w, *existing, modelID, commitTourReasoning, req.Message) {
+		return
+	}
 
 	// Built-in /transcription is durable queued user input backed by a hidden
 	// child. Reject bad commands before any side effect (draft promotion or
@@ -1385,6 +1355,10 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// The command itself is control input: it is never persisted as an LLM
 	// message and is replaced by the finished transcript before queue drain.
 	if isTranscription {
+		if senderUserData != nil {
+			senderUserData.Text = req.Message
+			ctx = contextWithTurnUserData(ctx, *senderUserData)
+		}
 		s.queueTranscription(ctx, w, manager, transcriptionPath, transcriptionContext, modelID)
 		return
 	}
@@ -1438,6 +1412,10 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	req.Message = newMsg
+	if senderUserData != nil {
+		senderUserData.Text = req.Message
+		ctx = contextWithTurnUserData(ctx, *senderUserData)
+	}
 
 	// Create user message
 	userMessage := llm.Message{
@@ -2617,12 +2595,14 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 // ModelInfo represents a model in the API response
 type ModelInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name,omitempty"`
-	Source      string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
-	BaseURL     string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
-	APIType     string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
-	Ready       bool   `json:"ready"`
+	ID           string `json:"id"`
+	DisplayName  string `json:"display_name,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Source       string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+	BaseURL      string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
+	APIType      string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
+	APIModelName string `json:"api_model_name,omitempty"`
+	Ready        bool   `json:"ready"`
 	// MaxContextTokens is the models.dev context window (clamped to the
 	// pricing tier, see modelsdev.LookupContextLimit); 0 when unknown.
 	MaxContextTokens int  `json:"max_context_tokens,omitempty"`
@@ -2974,9 +2954,11 @@ func (s *Server) getModelList() []ModelInfo {
 			// Add display name and source from model info
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
 				info.DisplayName = modelInfo.DisplayName
+				info.Mode = modelInfo.Mode
 				info.Source = modelInfo.Source
 				info.BaseURL = modelInfo.BaseURL
 				info.APIType = modelInfo.APIType
+				info.APIModelName = modelInfo.APIModelName
 				info.MaxContextTokens, _ = modelsdev.LookupContextLimit(modelInfo.BaseURL, modelInfo.APIModelName)
 			}
 			modelList = append(modelList, info)
@@ -4323,8 +4305,8 @@ func validateModelReasoningLevel(model *ModelInfo, level string) string {
 }
 
 func validateConversationOptions(opts db.ConversationOptions) string {
-	if opts.Kind != "" || opts.ParentPointer != nil {
-		return "kind and parent_pointer are internal conversation options"
+	if opts.Kind != "" || opts.ParentPointer != nil || opts.CommitTour != nil {
+		return "kind, parent_pointer, and commit_tour are internal conversation options"
 	}
 	for name, v := range opts.ToolOverrides {
 		if v != "on" && v != "off" {

@@ -6,8 +6,6 @@
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">📋</span>
         <span class="tool-command">{{ displayText }}</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
       </div>
       <button
         class="tool-toggle"
@@ -31,11 +29,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 const props = defineProps<{
   toolName: string;
@@ -46,7 +42,7 @@ const props = defineProps<{
   executionTime?: string;
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const output = computed(() =>
   props.toolResult && props.toolResult.length > 0 && props.toolResult[0].Text

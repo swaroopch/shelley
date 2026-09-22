@@ -42,8 +42,10 @@ export interface AvailableModel {
   id: string;
   display_name?: string;
   source?: string;
+  mode?: string;
   base_url?: string;
   api_type?: string;
+  api_model_name?: string;
   ready: boolean;
   max_context_tokens?: number;
   is_default?: boolean;
@@ -69,6 +71,17 @@ export interface GitTour {
   chunks: GitTourEntry[];
 }
 
+export type GitTourBuildState = "absent" | "building" | "present" | "failed";
+
+export interface GitTourBuildStatus {
+  status: GitTourBuildState;
+  hash: string;
+  repository?: string;
+  worker_conversation_id?: string;
+  worker_slug?: string;
+  error?: string;
+}
+
 export interface GitTourResponse {
   hash: string;
   tour: GitTour;
@@ -77,6 +90,7 @@ export interface GitTourResponse {
 export interface ChatAcceptedResponse {
   status?: string;
   btw?: BtwReaderDescriptor;
+  tour?: GitTourBuildStatus;
 }
 
 export interface BtwSummaryReceipt {
@@ -355,6 +369,14 @@ class ApiService {
     return data.readers ?? [];
   }
 
+  async dismissBtwExchange(conversationId: string, exchangeId: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/conversation/${conversationId}/btw/${exchangeId}/dismiss`,
+      { method: "POST", headers: this.postHeaders },
+    );
+    if (!response.ok) throw await responseError(response, "Failed to dismiss BTW");
+  }
+
   async summarizeBtwExchange(
     conversationId: string,
     exchangeId: string,
@@ -613,6 +635,27 @@ class ApiService {
       throw new Error(text || response.statusText);
     }
     return response.json();
+  }
+
+  async getGitTourStatus(cwd: string, hash: string): Promise<GitTourBuildStatus> {
+    const params = new URLSearchParams({ cwd, hash });
+    const response = await fetch(`${this.baseUrl}/git/tour/status?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to check commit tour status");
+    }
+    return response.json();
+  }
+
+  async requestGitTour(
+    conversationId: string,
+    cwd: string,
+    hash: string,
+  ): Promise<GitTourBuildStatus> {
+    const accepted = await this.sendMessage(conversationId, {
+      message: `/tour ${hash}\n${cwd}`,
+    });
+    if (!accepted.tour) throw new Error("Commit tour request returned no status");
+    return accepted.tour;
   }
 
   async hasGitTour(cwd: string, hash: string): Promise<boolean> {
@@ -1020,6 +1063,8 @@ export interface CustomModel {
   max_tokens: number;
   tags: string; // Comma-separated tags (e.g., "slug" for slug generation)
   reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_replay: "auto" | "none" | "reasoning_content";
+  resolved_reasoning_replay?: "none" | "reasoning_content";
   reasoning_support: "auto" | "yes" | "no";
   reasoning_map: string;
   supports_reasoning: boolean;
@@ -1036,6 +1081,7 @@ export interface CreateCustomModelRequest {
   max_tokens: number;
   tags: string; // Comma-separated tags
   reasoning_effort: string; // Legacy provider-verbatim default
+  reasoning_replay: "auto" | "none" | "reasoning_content";
   reasoning_support: "auto" | "yes" | "no";
   reasoning_map: string;
   image_support: "auto" | "yes" | "no";
@@ -1049,6 +1095,7 @@ export interface TestCustomModelRequest {
   model_name: string;
   max_tokens?: number;
   reasoning_effort?: string;
+  reasoning_replay?: "auto" | "none" | "reasoning_content";
   reasoning_support?: "auto" | "yes" | "no";
   reasoning_map?: string;
 }

@@ -71,6 +71,48 @@ test.describe("Scroll behavior", () => {
     ).toBe(0);
   });
 
+  test("a promoted draft allows bare scrolling after its first response", async ({ page }) => {
+    await page.goto("/new");
+    const input = page.getByTestId("message-input");
+    const container = page.locator(".messages-container");
+    const scrollButton = page.locator(".scroll-to-bottom-button");
+    await expect(input).toBeVisible();
+    // Let the observer report the empty list before the draft gains an ID.
+    await container.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+    await input.fill("wide tables");
+    await expect(page).toHaveURL(/\/c\/[^/]+$/);
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Wide Table (many columns)", { exact: true })).toBeAttached();
+    await expect(page.getByTestId("agent-thinking")).toBeHidden();
+    await expect
+      .poll(() => container.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight))
+      .toBeLessThan(5);
+    await expect(scrollButton).toBeHidden();
+
+    // Find/accessibility navigation has no preceding wheel or touch event.
+    // It must release initial bottom restoration, not get pulled back down.
+    await container.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(scrollButton).toBeVisible();
+    await expect.poll(() => container.evaluate((el) => el.scrollTop)).toBeLessThan(5);
+
+    await input.fill("markdown: still reading");
+    await page.getByTestId("send-button").click();
+    await expect(page.locator(".message-agent").last()).toContainText("still reading");
+    await expect(page.getByTestId("agent-thinking")).toBeHidden();
+    await expect.poll(() => container.evaluate((el) => el.scrollTop)).toBeLessThan(5);
+    await expect(scrollButton).toBeVisible();
+
+    await scrollButton.click();
+    await expect(scrollButton).toBeHidden();
+    await expect
+      .poll(() => container.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight))
+      .toBeLessThan(5);
+  });
+
   test("shows scroll-to-bottom button when scrolled up, auto-scrolls when at bottom", async ({
     page,
     request,
@@ -813,7 +855,7 @@ test.describe("Scroll behavior", () => {
 // messageStore. No model timing, keyboard surrogate, or direct component calls.
 const streamingTest = test.extend<{
   controlledStream: {
-    chunk: (type: "text" | "thinking", text: string) => Promise<void>;
+    chunk: (type: "text" | "thinking", text: string, renderedText?: string) => Promise<void>;
     finish: () => Promise<void>;
   };
 }>({
@@ -882,12 +924,12 @@ const streamingTest = test.extend<{
         });
       await working(true);
       let seq = 0;
-      const chunk = async (type: "text" | "thinking", text: string) => {
+      const chunk = async (type: "text" | "thinking", text: string, renderedText = text) => {
         await send({
           conversation_id: conversationId,
           stream_delta: { type, text, index: type === "thinking" ? 0 : 1, seq: seq++ },
         });
-        await expect(page.locator(".streaming-message")).toContainText(text);
+        await expect(page.locator(".streaming-message")).toContainText(renderedText);
         // Let the rendered chunk's resize and intersection callbacks run.
         await page.evaluate(
           () =>
@@ -1127,6 +1169,27 @@ streamingTest.describe("Mobile streaming scroll gestures", () => {
 
 streamingTest.describe("Desktop streaming scroll behavior", () => {
   streamingTest.use({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false });
+
+  streamingTest(
+    "streamed fenced code stays plain until the durable message renders",
+    async ({ page, controlledStream }) => {
+      await expect(
+        page.locator(".message-agent pre > code").last().locator(".shelley-code-token").first(),
+      ).toBeAttached({ timeout: 30000 });
+
+      await controlledStream.chunk(
+        "text",
+        "```typescript\nconst values = Array.from({ length: 200 }, (_, index) => index);\n```\n",
+        "const values = Array.from({ length: 200 }, (_, index) => index);",
+      );
+
+      const streamedCode = page.locator(".streaming-message pre > code");
+      await expect(streamedCode).toHaveCount(1);
+      await expect(streamedCode).not.toHaveAttribute("data-shelley-code-highlight");
+      await expect(streamedCode.locator(".shelley-code-token")).toHaveCount(0);
+      await controlledStream.finish();
+    },
+  );
 
   streamingTest(
     "mouse-held streaming still follows; wheel and pointer scroll-up still disarm",

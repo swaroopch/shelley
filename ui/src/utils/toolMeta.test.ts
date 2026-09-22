@@ -1,10 +1,4 @@
-import {
-  HEADLINE_BUDGET_NARROW,
-  HEADLINE_BUDGET_WIDE,
-  isAutoExpandTool,
-  toolEmoji,
-  toolHeadline,
-} from "./toolMeta";
+import { HEADLINE_BUDGET_NARROW, HEADLINE_BUDGET_WIDE, toolEmoji, toolHeadline } from "./toolMeta";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(`Assertion failed: ${msg}`);
@@ -148,12 +142,14 @@ run("umbrella browser tool picks per-family emoji for folded-in actions", () => 
   }
 });
 
-run("llm_one_shot image output stays inline", () => {
+run("retired keyword_search keeps its historical icon and query headline", () => {
+  const input = { query: "find authentication handlers", search_terms: ["auth", "handler"] };
+  assert(toolEmoji("keyword_search") === "🔍", "keyword_search icon");
+  assert(toolHeadline("keyword_search", input) === input.query, "keyword_search query");
   assert(
-    isAutoExpandTool("llm_one_shot", {}, { images: [{ url: "/api/read?path=image.png" }] }),
-    "image output should auto-expand",
+    toolHeadline("keyword_search", undefined) === "keyword_search",
+    "keyword_search without input",
   );
-  assert(!isAutoExpandTool("llm_one_shot", {}, { images: [] }), "text-only output stays a pill");
 });
 
 console.log("\ntoolMeta tests passed");

@@ -1,6 +1,6 @@
 <!-- Recursive renderer for one node of ChatInterface.vue's render model.
      Mirrors the per-item branches of renderMessages() in ChatInterface.tsx
-     (timestamps, day separators, token markers, messages, tool pills/cards,
+     (timestamps, day separators, token markers, messages, tool cards,
      and the collapsible carried band). -->
 <template>
   <div
@@ -23,6 +23,7 @@
     <MessageComponent
       :message="node.item.message"
       :on-open-diff-viewer="onOpenDiffViewer"
+      :can-request-tour="canRequestTour"
       :on-comment-text-change="onCommentTextChange"
       :on-fork="conversationId ? onFork : undefined"
     />
@@ -34,11 +35,6 @@
       :exchange="exchange"
     />
   </template>
-  <ToolPillsRow
-    v-else-if="node.kind === 'tool-pills'"
-    :items="node.items"
-    :on-comment-text-change="onCommentTextChange"
-  />
   <CoalescedToolCall
     v-else-if="node.kind === 'tool-call'"
     :tool-name="node.item.toolName || 'Unknown Tool'"
@@ -59,6 +55,7 @@
       :node="child"
       :conversation-id="conversationId"
       :on-open-diff-viewer="onOpenDiffViewer"
+      :can-request-tour="canRequestTour"
       :on-comment-text-change="onCommentTextChange"
       :on-fork="onFork"
     />
@@ -69,7 +66,6 @@
 import type { RenderNode } from "./renderNode";
 import MessageComponent from "./Message.vue";
 import MessageTimestamp from "./MessageTimestamp.vue";
-import ToolPillsRow from "./ToolPillsRow.vue";
 import CoalescedToolCall from "./CoalescedToolCall.vue";
 import CarriedBand from "./CarriedBand.vue";
 import BtwInline from "./BtwInline.vue";
@@ -78,6 +74,7 @@ defineProps<{
   node: RenderNode;
   conversationId: string | null;
   onOpenDiffViewer: (commit: string, cwd?: string) => void;
+  canRequestTour: boolean;
   onCommentTextChange: (text: string) => void;
   onFork: (messageId: string) => void;
 }>();

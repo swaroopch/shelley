@@ -367,134 +367,6 @@ func TestGetHistory(t *testing.T) {
 	}
 }
 
-func TestLoopWithKeywordTool(t *testing.T) {
-	// Test that keyword tool doesn't crash with nil pointer dereference
-	service := predictable.NewService()
-
-	var messages []llm.Message
-	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
-		messages = append(messages, message)
-		return nil
-	}
-
-	// Add a mock keyword tool that doesn't actually search
-	tools := []*llm.Tool{
-		{
-			Name:        "keyword_search",
-			Description: "Mock keyword search",
-			InputSchema: llm.MustSchema(`{"type": "object", "properties": {"query": {"type": "string"}, "search_terms": {"type": "array", "items": {"type": "string"}}}, "required": ["query", "search_terms"]}`),
-			Run: func(ctx context.Context, input json.RawMessage) llm.ToolOut {
-				// Simple mock implementation
-				return llm.ToolOut{LLMContent: []llm.Content{{Type: llm.ContentTypeText, Text: "mock keyword search result"}}}
-			},
-		},
-	}
-
-	loop := NewLoop(Config{
-		LLM:           service,
-		History:       []llm.Message{},
-		Tools:         tools,
-		RecordMessage: recordMessage,
-	})
-
-	// Send a user message that will trigger the default response
-	userMessage := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{
-			{Type: llm.ContentTypeText, Text: "Please search for some files"},
-		},
-	}
-
-	loop.QueueUserMessage(userMessage)
-
-	// Process one turn
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-
-	err := loop.ProcessOneTurn(ctx)
-	if err != nil {
-		t.Fatalf("ProcessOneTurn failed: %v", err)
-	}
-
-	// Verify we got expected messages
-	// Note: User messages are recorded by ConversationManager, not by Loop,
-	// so we only expect the assistant response to be recorded here
-	if len(messages) < 1 {
-		t.Fatalf("Expected at least 1 message (assistant), got %d", len(messages))
-	}
-
-	// Should have assistant response
-	if messages[0].Role != llm.MessageRoleAssistant {
-		t.Errorf("Expected first recorded message to be assistant, got %s", messages[0].Role)
-	}
-}
-
-func TestLoopWithActualKeywordTool(t *testing.T) {
-	// Test that actual keyword tool works with Loop
-	service := predictable.NewService()
-
-	var messages []llm.Message
-	recordMessage := func(ctx context.Context, message llm.Message, usage llm.Usage, otherUsage []llm.PurposedUsage) error {
-		messages = append(messages, message)
-		return nil
-	}
-
-	// Use the actual keyword tool from claudetool package
-	// Note: We need to import it first
-	tools := []*llm.Tool{
-		// Add a simplified keyword tool to avoid file system dependencies in tests
-		{
-			Name:        "keyword_search",
-			Description: "Search for files by keyword",
-			InputSchema: llm.MustSchema(`{"type": "object", "properties": {"query": {"type": "string"}, "search_terms": {"type": "array", "items": {"type": "string"}}}, "required": ["query", "search_terms"]}`),
-			Run: func(ctx context.Context, input json.RawMessage) llm.ToolOut {
-				// Simple mock implementation - no context dependencies
-				return llm.ToolOut{LLMContent: []llm.Content{{Type: llm.ContentTypeText, Text: "mock keyword search result"}}}
-			},
-		},
-	}
-
-	loop := NewLoop(Config{
-		LLM:           service,
-		History:       []llm.Message{},
-		Tools:         tools,
-		RecordMessage: recordMessage,
-	})
-
-	// Send a user message that will trigger the default response
-	userMessage := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{
-			{Type: llm.ContentTypeText, Text: "Please search for some files"},
-		},
-	}
-
-	loop.QueueUserMessage(userMessage)
-
-	// Process one turn
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-
-	err := loop.ProcessOneTurn(ctx)
-	if err != nil {
-		t.Fatalf("ProcessOneTurn failed: %v", err)
-	}
-
-	// Verify we got expected messages
-	// Note: User messages are recorded by ConversationManager, not by Loop,
-	// so we only expect the assistant response to be recorded here
-	if len(messages) < 1 {
-		t.Fatalf("Expected at least 1 message (assistant), got %d", len(messages))
-	}
-
-	// Should have assistant response
-	if messages[0].Role != llm.MessageRoleAssistant {
-		t.Errorf("Expected first recorded message to be assistant, got %s", messages[0].Role)
-	}
-
-	t.Log("Keyword tool test passed - no nil pointer dereference occurred")
-}
-
 func TestInsertMissingToolResults(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1695,6 +1567,7 @@ func TestIsRetryableError(t *testing.T) {
 		{"timeout", fmt.Errorf("i/o timeout"), true},
 		{"idle stall timeout", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
 		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
+		{"structured automatic retry suppressed", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true, NoImmediateRetry: true}}, false},
 		{"structured non-retryable overrides EOF text", &testRequestError{message: "EOF", info: llm.RequestErrorInfo{}}, false},
 		{"rate limit not in tight set", fmt.Errorf("rate limit exceeded"), false},
 		{"503 not in tight set", fmt.Errorf("upstream returned 503"), false},
@@ -1728,6 +1601,7 @@ func TestIsRetryableLLMError(t *testing.T) {
 		{"deadline exceeded retryable", fmt.Errorf("context deadline exceeded"), true},
 		{"idle stall timeout retryable", fmt.Errorf("stream: %w", newIdleStallError(3*time.Minute)), true},
 		{"structured retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true}}, true},
+		{"structured manual-only retry remains retryable", &testRequestError{message: "provider hint", info: llm.RequestErrorInfo{Retryable: true, NoImmediateRetry: true}}, true},
 		{"structured non-retryable overrides rate-limit text", &testRequestError{message: "rate limit exceeded", info: llm.RequestErrorInfo{}}, false},
 		{"deployment scaling retryable", fmt.Errorf("DEPLOYMENT_SCALING_UP scale-up in progress"), true},
 		{"credits exhausted not retryable", fmt.Errorf("LLM credits exhausted; credits refresh over time"), false},

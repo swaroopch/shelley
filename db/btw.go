@@ -46,11 +46,13 @@ func scrubManagedBtwOptions(raw string) (string, bool, error) {
 	}
 	_, hasKind := options["kind"]
 	_, hasPointer := options["parent_pointer"]
-	if !hasKind && !hasPointer {
+	_, hasCommitTour := options["commit_tour"]
+	if !hasKind && !hasPointer && !hasCommitTour {
 		return raw, false, nil
 	}
 	delete(options, "kind")
 	delete(options, "parent_pointer")
+	delete(options, "commit_tour")
 	scrubbed, err := json.Marshal(options)
 	return string(scrubbed), true, err
 }
@@ -169,6 +171,30 @@ func (db *DB) ListBtwReaders(ctx context.Context, parentID string) ([]BtwReaderI
 	return readers, err
 }
 
+// DismissBtwReader removes managed BTW metadata from a child owned by parentID.
+// The conversation, its parent relationship, and all messages remain intact.
+func (db *DB) DismissBtwReader(ctx context.Context, parentID, childID string) error {
+	return db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		child, err := q.GetConversation(ctx, childID)
+		if err != nil {
+			return err
+		}
+		identity, ok := ManagedBtwReaderIdentity(child)
+		if !ok || identity.ParentConversationID != parentID {
+			return fmt.Errorf("not an owned BTW reader")
+		}
+		options, _, err := scrubManagedBtwOptions(child.ConversationOptions)
+		if err != nil {
+			return err
+		}
+		return q.UpdateConversationOptions(ctx, generated.UpdateConversationOptionsParams{
+			ConversationID:      childID,
+			ConversationOptions: options,
+		})
+	})
+}
+
 // ListFrozenParentMessages returns the exact context-visible parent prefix
 // selected by conversation, generation, and inclusive sequence boundary.
 func (db *DB) ListFrozenParentMessages(ctx context.Context, conversationID string, pointer BtwParentPointer) ([]generated.Message, error) {
@@ -212,6 +238,10 @@ func classifyBtwDeletionChildren(children []generated.Conversation) btwDeletionC
 	for _, child := range children {
 		if _, ok := ManagedBtwReaderIdentity(child); ok {
 			result.readers = append(result.readers, child.ConversationID)
+			continue
+		}
+		if _, ok := ManagedCommitTourRequest(child); ok {
+			result.readers = append(result.readers, child.ConversationID)
 		}
 	}
 	return result
@@ -230,9 +260,9 @@ func loadBtwDeletionChildren(ctx context.Context, q *generated.Queries, conversa
 	return classifyBtwDeletionChildren(children), true, nil
 }
 
-// PlanConversationDeletion returns only the direct, positively identified BTW
-// readers owned by conversationID. Every other child remains attached so the
-// generic foreign-key deletion behavior is unchanged.
+// PlanConversationDeletion returns the direct managed detached children owned
+// by conversationID. Every other child remains attached so the generic
+// foreign-key deletion behavior is unchanged.
 func (db *DB) PlanConversationDeletion(ctx context.Context, conversationID string) ([]string, error) {
 	var readers []string
 	err := db.pool.Rx(ctx, func(ctx context.Context, rx *Rx) error {
@@ -246,8 +276,8 @@ func (db *DB) PlanConversationDeletion(ctx context.Context, conversationID strin
 	return readers, err
 }
 
-// DeleteConversationWithBtwReaders atomically deletes direct managed BTW
-// readers and conversationID. Any other child remains attached, so the parent
+// DeleteConversationWithBtwReaders atomically deletes direct managed detached
+// children and conversationID. Any other child remains attached, so the parent
 // delete fails and rolls the reader deletions back exactly like generic
 // conversation deletion.
 func (db *DB) DeleteConversationWithBtwReaders(ctx context.Context, conversationID string) ([]string, error) {

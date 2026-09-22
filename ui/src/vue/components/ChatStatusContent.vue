@@ -44,21 +44,19 @@
     class="status-bar-active"
     data-testid="agent-thinking"
   >
-    <div class="status-working-group">
-      <AnimatedWorkingStatus />
-      <button
-        :disabled="cancelling"
-        class="status-stop-button"
-        v-tooltip.top="'Stop'"
-        :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
-        @click="onCancel"
-      >
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <rect x="6" y="6" width="12" height="12" rx="1" />
-        </svg>
-        <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
-      </button>
-    </div>
+    <AnimatedWorkingStatus />
+    <button
+      :disabled="cancelling"
+      class="status-stop-button"
+      v-tooltip.top="'Stop'"
+      :aria-label="cancelling ? 'Cancelling...' : 'Stop'"
+      @click="onCancel"
+    >
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12" rx="1" />
+      </svg>
+      <span class="status-stop-label">{{ cancelling ? "Cancelling..." : "Stop" }}</span>
+    </button>
     <StatusReadout
       v-bind="readoutProps"
       :cwd="cwd"
@@ -212,7 +210,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted, nextTick } from "vue";
-import type { Conversation, Message } from "../../types";
+import type { Conversation, Message, Model } from "../../types";
 import type { OtherUsageRow, UsageEntry } from "../../utils/tokenCostGraph";
 import { tildifyPath } from "../../utils/tildify";
 import { useI18n } from "../composables/i18n";
@@ -221,16 +219,6 @@ import AnimatedWorkingStatus from "./AnimatedWorkingStatus.vue";
 import ModelPicker from "./ModelPicker.vue";
 import StatusReadout from "./StatusReadout.vue";
 
-type ModelInfo = {
-  id: string;
-  display_name?: string;
-  source?: string;
-  ready: boolean;
-  max_context_tokens?: number;
-  supports_reasoning?: boolean;
-  reasoning_levels?: Exclude<ThinkingLevel, "default">[];
-  default_reasoning_level?: string;
-};
 type ToolInfo = { name: string; summary: string; default_on: boolean };
 
 const props = defineProps<{
@@ -249,7 +237,7 @@ const props = defineProps<{
   otherUsageRows: OtherUsageRow[];
   messages: Message[];
   hostname: string;
-  models: ModelInfo[];
+  models: Model[];
   selectedModel: string;
   sending: boolean;
   refreshingModels: boolean;
@@ -356,7 +344,8 @@ function positionPopover() {
   const viewportHeight = document.documentElement.clientHeight;
   const margin = 8;
   const wrapRect = wrapper.getBoundingClientRect();
-  const width = popover.offsetWidth;
+  // Keep both width and offset fractional: rounding either can cross the margin.
+  const width = popover.getBoundingClientRect().width;
   const maxLeft = viewportWidth - margin - width;
   // Prefer aligning the popover's left edge to the gear, clamped into view.
   const desiredLeft = Math.max(margin, Math.min(wrapRect.left, maxLeft));
@@ -371,7 +360,7 @@ function positionPopover() {
   const minHeight = Math.min(POPOVER_MIN_HEIGHT, Math.max(0, viewportHeight - 2 * margin));
   const maxHeight = Math.max(minHeight, spaceAbove);
   const style: Record<string, string> = {
-    left: `${Math.round(desiredLeft - wrapRect.left)}px`,
+    left: `${desiredLeft - wrapRect.left}px`,
     right: "auto",
     // Floored, not rounded: rounding a bound *up* spends a fraction of a pixel
     // more room than there is, putting the popover back over the very edge it

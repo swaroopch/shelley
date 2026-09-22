@@ -1,5 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { createConversationViaAPI, openToolPill } from "./helpers";
+import { createConversationViaAPI, testWorkingDirectory } from "./helpers";
+
+// / resumes the shared server's latest conversation. Always start our own,
+// and pin a real cwd rather than inheriting another spec's synthetic path.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(
+    (cwd) => localStorage.setItem("shelley_selected_cwd", cwd),
+    testWorkingDirectory(),
+  );
+});
 
 // The tool-call rendering tests were split out into
 // conversation-tool-calls.spec.ts: at 47s of test time this file was one of the
@@ -8,7 +17,7 @@ import { createConversationViaAPI, openToolPill } from "./helpers";
 // across lanes.
 test.describe("Shelley Conversation Tests", () => {
   test("can send Hello and get greeting response", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     // Wait for the message input using improved selector
@@ -42,7 +51,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("can use echo command", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -64,7 +73,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("responds differently to lowercase hello", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -86,7 +95,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("shows thinking indicator while awaiting response", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -109,7 +118,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("shows thinking indicator on follow-up messages", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -141,7 +150,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("can use bash tool", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -161,12 +170,12 @@ test.describe("Shelley Conversation Tests", () => {
       { timeout: 30000 },
     );
 
-    // Verify tool usage appears as a completed bash pill.
-    await expect(
-      page.locator('.tool-pill[data-tool-name="bash"][data-testid="tool-call-completed"]').first(),
-    ).toBeVisible({
+    // Verify tool usage appears in the UI with coalesced tool call
+    await expect(page.locator('[data-testid="tool-call-completed"]').first()).toBeVisible({
       timeout: 10000,
     });
+    // Check that the tool name "bash" is visible
+    await expect(page.locator("text=bash").first()).toBeVisible();
   });
 
   test("gives default response for undefined messages", async ({ page, request }) => {
@@ -184,7 +193,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("conversation persists and displays correctly", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -223,7 +232,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("can send message with Enter key", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -250,7 +259,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("handles think tool correctly", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -275,7 +284,7 @@ test.describe("Shelley Conversation Tests", () => {
   });
 
   test("handles patch tool correctly", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -299,8 +308,8 @@ test.describe("Shelley Conversation Tests", () => {
     await expect(page.locator("text=patch").first()).toBeVisible();
   });
 
-  test("displays tool results in a detail modal", async ({ page }) => {
-    await page.goto("/");
+  test("displays tool results with collapsible details", async ({ page }) => {
+    await page.goto("/new");
     await page.waitForLoadState("domcontentloaded");
 
     const messageInput = page.getByTestId("message-input");
@@ -315,7 +324,8 @@ test.describe("Shelley Conversation Tests", () => {
       timeout: 30000,
     });
 
-    const modal = await openToolPill(page, "testing tool results");
-    await expect(modal.locator(".bash-tool-details")).toBeVisible({ timeout: 10000 });
+    // Check for bash tool header (collapsible element)
+    const bashToolHeader = page.locator(".bash-tool-header");
+    await expect(bashToolHeader.first()).toBeVisible({ timeout: 10000 });
   });
 });

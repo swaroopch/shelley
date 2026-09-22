@@ -43,9 +43,21 @@ type ResponsesService struct {
 	// custom-model configurations to pass through provider-specific values
 	// (e.g. "xhigh", "none") without Shelley needing to know them.
 	ReasoningEffort string
+
+	// ReasoningReplay controls persisted reasoning replay. The zero value and
+	// "auto" resolve from models.dev; "none" disables replay explicitly.
+	ReasoningReplay ReasoningReplay
 }
 
 var _ llm.Service = (*ResponsesService)(nil)
+
+func (s *ResponsesService) messageOrigin(model Model) llm.MessageOrigin {
+	return llm.MessageOrigin{
+		Provider:  cmp.Or(s.ProviderName, "openai"),
+		Transport: "openai-responses:" + oaiTransportIdentity(cmp.Or(s.ModelURL, model.URL, OpenAIURL)),
+		Model:     model.ModelName,
+	}
+}
 
 const (
 	responsesImagePatchSize     = 32
@@ -210,14 +222,10 @@ type responsesSummary struct {
 
 type responsesUsage struct {
 	InputTokens         int                           `json:"input_tokens"`
-	InputTokensDetails  *responsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
+	InputTokensDetails  openAIInputTokensDetails      `json:"input_tokens_details"`
 	OutputTokens        int                           `json:"output_tokens"`
 	OutputTokensDetails *responsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 	TotalTokens         int                           `json:"total_tokens"`
-}
-
-type responsesInputTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
 }
 
 type responsesOutputTokensDetails struct {
@@ -231,8 +239,89 @@ type responsesError struct {
 	Code    json.RawMessage `json:"code"`
 }
 
-// fromLLMMessageResponses converts llm.Message to Responses API input items
-func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
+type responsesRequestError struct {
+	err               error
+	retryable         bool
+	noImmediateRetry  bool
+	idleStallDuration time.Duration
+}
+
+var _ llm.RequestError = (*responsesRequestError)(nil)
+
+func (e *responsesRequestError) Error() string { return e.err.Error() }
+func (e *responsesRequestError) Unwrap() error { return e.err }
+
+func (e *responsesRequestError) RequestErrorInfo() llm.RequestErrorInfo {
+	return llm.RequestErrorInfo{
+		Retryable:         e.retryable,
+		NoImmediateRetry:  e.noImmediateRetry,
+		IdleStallDuration: e.idleStallDuration,
+	}
+}
+
+func newResponsesRequestError(err error, retryable bool) error {
+	return &responsesRequestError{err: err, retryable: retryable}
+}
+
+func responsesErrorRetryable(apiErr *responsesError) bool {
+	retryable, classified := classifyResponsesError(apiErr)
+	return retryable || !classified
+}
+
+func classifyResponsesError(apiErr *responsesError) (retryable, classified bool) {
+	if apiErr == nil {
+		return false, false
+	}
+	message := strings.ToLower(apiErr.Message)
+	if strings.Contains(message, "does not support image") || strings.Contains(message, "image input is not supported") || strings.Contains(message, "image inputs are not supported") {
+		return false, true
+	}
+
+	var code string
+	_ = json.Unmarshal(apiErr.Code, &code)
+	switch strings.ToLower(code) {
+	case "server_error", "rate_limit_exceeded", "overloaded_error", "vector_store_timeout":
+		return true, true
+	case "unsupported_value", "invalid_value", "invalid_request_error", "model_not_found", "insufficient_quota", "context_length_exceeded", "invalid_api_key",
+		"invalid_prompt", "data_residency_mismatch", "bio_policy", "misalignment_policy_violation", "invalid_image", "invalid_image_format", "invalid_base64_image", "invalid_image_url",
+		"image_too_large", "image_too_small", "image_parse_error", "image_content_policy_violation", "invalid_image_mode", "image_file_too_large",
+		"unsupported_image_media_type", "empty_image_file", "failed_to_download_image", "image_file_not_found":
+		return false, true
+	}
+	var numericCode int
+	if json.Unmarshal(apiErr.Code, &numericCode) == nil {
+		switch {
+		case numericCode == http.StatusRequestTimeout || numericCode == http.StatusTooManyRequests:
+			return true, true
+		case numericCode >= 400 && numericCode < 500:
+			return false, true
+		case numericCode >= 500 && numericCode < 600:
+			return true, true
+		}
+	}
+
+	switch strings.ToLower(apiErr.Type) {
+	case "server_error", "api_error", "rate_limit_error", "overloaded_error":
+		return true, true
+	case "invalid_request_error", "authentication_error", "permission_error", "not_found_error":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+type responsesReasoningReplay uint8
+
+const (
+	responsesReasoningReplayNone responsesReasoningReplay = iota
+	responsesReasoningReplayEncrypted
+	responsesReasoningReplaySummary
+)
+
+// fromLLMMessageResponses converts llm.Message to Responses API input items.
+// Summary-only reasoning is display metadata for OpenAI, but Fireworks uses it
+// as the Responses representation of models.dev reasoning_content.
+func fromLLMMessageResponses(msg llm.Message, reasoningReplay responsesReasoningReplay) []responsesInputItem {
 	var items []responsesInputItem
 
 	// Separate tool results from regular content
@@ -337,7 +426,9 @@ func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
 				}
 			case llm.ContentTypeThinking:
 				metadata := c.OpenAIResponsesReasoning
-				if msg.Role != llm.MessageRoleAssistant || metadata == nil || metadata.EncryptedContent == "" {
+				encrypted := metadata != nil && metadata.EncryptedContent != "" && reasoningReplay == responsesReasoningReplayEncrypted
+				summaryOnly := metadata != nil && metadata.EncryptedContent == "" && reasoningReplay == responsesReasoningReplaySummary && metadata.ID != "" && len(metadata.Summary) > 0
+				if msg.Role != llm.MessageRoleAssistant || metadata == nil || (!encrypted && !summaryOnly) {
 					continue
 				}
 				flushMessage()
@@ -510,24 +601,9 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 }
 
 // toLLMUsageFromResponses converts Responses API usage to llm.Usage.
-//
-// OpenAI's Responses API reports input_tokens as the total input (including cached),
-// with input_tokens_details.cached_tokens as the cached subset.
-// Our Usage struct follows Anthropic's convention where InputTokens is the non-cached
-// portion and TotalInputTokens() = InputTokens + CacheCreationInputTokens + CacheReadInputTokens.
-// So we map: InputTokens = total - cached, CacheReadInputTokens = cached, CacheCreationInputTokens = 0.
 func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers http.Header) llm.Usage {
-	totalIn := uint64(usage.InputTokens)
-	var cached uint64
-	if usage.InputTokensDetails != nil {
-		cached = uint64(usage.InputTokensDetails.CachedTokens)
-	}
-	out := uint64(usage.OutputTokens)
-	u := llm.Usage{
-		InputTokens:          totalIn - cached,
-		CacheReadInputTokens: cached,
-		OutputTokens:         out,
-	}
+	u := splitOpenAIInputUsage(usage.InputTokens, usage.InputTokensDetails)
+	u.OutputTokens = uint64(usage.OutputTokens)
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }
@@ -594,12 +670,19 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 	httpc := cmp.Or(s.HTTPC, http.DefaultClient)
 	model := cmp.Or(s.Model, DefaultModel)
 	openAIResponses := s.isOpenAIResponses()
+	reasoningReplay := responsesReasoningReplayNone
+	switch ResolveReasoningReplay(cmp.Or(s.ModelURL, model.URL), model.ModelName, s.ReasoningReplay) {
+	case ReasoningReplayContent:
+		reasoningReplay = responsesReasoningReplaySummary
+	case ReasoningReplayNone:
+	case "":
+		if openAIResponses {
+			reasoningReplay = responsesReasoningReplayEncrypted
+		}
+	}
 
 	var allInput []responsesInputItem
 	messages := ir.Messages
-	if !openAIResponses {
-		messages = withoutOpenAIResponsesReasoning(messages)
-	}
 	if openAIResponses {
 		fittedMessages, err := fitResponsesImagesToPatchLimit(messages, responsesImagePatchSize, responsesMaxImagePatchCount)
 		if err != nil {
@@ -607,13 +690,15 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		}
 		messages = fittedMessages
 	}
+	origin := s.messageOrigin(model)
 	for i, msg := range messages {
+		msg = filterReasoningForOrigin(msg, origin)
 		for j, c := range msg.Content {
 			if len(c.Citations) > 0 && c.Text == "" {
 				return nil, fmt.Errorf("openai-responses messages[%d].content[%d]: cannot replay citations on empty assistant text", i, j)
 			}
 		}
-		items := fromLLMMessageResponses(msg)
+		items := fromLLMMessageResponses(msg, reasoningReplay)
 		allInput = append(allInput, items...)
 	}
 
@@ -742,13 +827,19 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 
 	// retry loop
 	retryStart := time.Now()
-	var errs error               // accumulated errors across all attempts
-	var lastErrSummary string    // short description of the most recent attempt failure
-	var lastErrStatus int        // HTTP status of the most recent attempt failure, 0 if none
+	var errs error            // accumulated errors across all attempts
+	var lastErrSummary string // short description of the most recent attempt failure
+	var lastErrStatus int     // HTTP status of the most recent attempt failure, 0 if none
+	var lastRequestErrorInfo llm.RequestErrorInfo
 	var retryAfter time.Duration // hint from upstream Retry-After header, reset each attempt
 	for attempts := 0; ; attempts++ {
 		if attempts > 15 {
-			return nil, fmt.Errorf("responses request failed after %d attempts (url=%s, model=%s): %w", attempts, fullURL, model.ModelName, errs)
+			return nil, &responsesRequestError{
+				err:               fmt.Errorf("responses request failed after %d attempts (url=%s, model=%s): %w", attempts, fullURL, model.ModelName, errs),
+				retryable:         true,
+				noImmediateRetry:  true,
+				idleStallDuration: lastRequestErrorInfo.IdleStallDuration,
+			}
 		}
 		if attempts > 0 {
 			if ctx.Err() != nil {
@@ -773,6 +864,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		}
 
 		// Create HTTP request
+		lastRequestErrorInfo = llm.RequestErrorInfo{}
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(reqJSON))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
@@ -789,6 +881,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		if err != nil {
 			lastErrSummary = "transport: " + llm.Truncate(err.Error(), 160)
 			lastErrStatus = 0
+			lastRequestErrorInfo, _ = llm.RequestErrorInfoFromError(err)
 			errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: %w", attempts+1, time.Now().Format(time.DateTime), err))
 			continue
 		}
@@ -849,11 +942,13 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 
 			case httpResp.StatusCode >= 400:
 				slog.WarnContext(ctx, "responses_request_failed", "error", terminalErrMessage, "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName)
-				return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage))
+				attemptErr := fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
+				return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
 
 			default:
 				slog.WarnContext(ctx, "responses_request_failed", "status_code", httpResp.StatusCode, "url", fullURL, "model", model.ModelName, "body", terminalErrMessage)
-				return nil, fmt.Errorf("status %d (url=%s, model=%s): %s", httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
+				attemptErr := fmt.Errorf("attempt %d at %s: status %d (url=%s, model=%s): %s", attempts+1, now, httpResp.StatusCode, fullURL, model.ModelName, terminalErrMessage)
+				return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
 			}
 		}
 
@@ -866,7 +961,13 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 				lastErrSummary = "stream: " + llm.Truncate(err.Error(), 160)
 				lastErrStatus = 0
 				slog.WarnContext(ctx, "responses_request_stream_failed", "error", err, "url", fullURL, "model", model.ModelName)
-				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err))
+				attemptErr := fmt.Errorf("attempt %d at %s: stream response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err)
+				info, classified := llm.RequestErrorInfoFromError(err)
+				lastRequestErrorInfo = info
+				if classified && !info.Retryable {
+					return nil, newResponsesRequestError(errors.Join(errs, attemptErr), false)
+				}
+				errs = errors.Join(errs, attemptErr)
 				continue
 			}
 			resp = *streamResp
@@ -882,6 +983,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 				lastErrSummary = "read: " + llm.Truncate(err.Error(), 160)
 				lastErrStatus = 0
 				slog.WarnContext(ctx, "responses_request_read_failed", "error", err, "url", fullURL, "model", model.ModelName)
+				lastRequestErrorInfo, _ = llm.RequestErrorInfoFromError(err)
 				errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: read response body (url=%s, model=%s): %w", attempts+1, now, fullURL, model.ModelName, err))
 				continue
 			}
@@ -895,13 +997,21 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 					errs = errors.Join(errs, fmt.Errorf("attempt %d at %s: decode response body (url=%s, model=%s, bytes=%d): %w", attempts+1, now, fullURL, model.ModelName, len(body), err))
 					continue
 				}
-				return nil, errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to unmarshal response (url=%s, model=%s, bytes=%d): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, len(body), err))
+				return nil, newResponsesRequestError(errors.Join(errs, fmt.Errorf("attempt %d at %s: failed to unmarshal response (url=%s, model=%s, bytes=%d): %w", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, len(body), err)), false)
 			}
 		}
 
-		// Check for errors in the response
+		// Check for errors in the response. A complete JSON error response was
+		// terminal before streaming support; keep that behavior rather than
+		// treating an unclassified application error as a transport failure.
 		if resp.Error != nil {
-			return nil, fmt.Errorf("response contains error: %s", resp.Error.Message)
+			attemptErr := fmt.Errorf("attempt %d at %s (url=%s, model=%s): response contains error: %s", attempts+1, time.Now().Format(time.DateTime), fullURL, model.ModelName, resp.Error.Message)
+			retryable, _ := classifyResponsesError(resp.Error)
+			return nil, &responsesRequestError{
+				err:              errors.Join(errs, attemptErr),
+				retryable:        retryable,
+				noImmediateRetry: retryable,
+			}
 		}
 
 		// Dump response if enabled
@@ -915,6 +1025,7 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 
 		result := s.toLLMResponseFromResponses(&resp, httpResp.Header)
 		result.URL = fullURL
+		result.Origin = &origin
 		return result, nil
 	}
 }
@@ -932,21 +1043,6 @@ func (s *ResponsesService) supportsReasoningSummaries() bool {
 	return s.isOpenAIResponses() || s.ProviderName == "xai"
 }
 
-func withoutOpenAIResponsesReasoning(messages []llm.Message) []llm.Message {
-	filtered := make([]llm.Message, len(messages))
-	copy(filtered, messages)
-	for i, msg := range messages {
-		content := make([]llm.Content, 0, len(msg.Content))
-		for _, item := range msg.Content {
-			if item.OpenAIResponsesReasoning == nil {
-				content = append(content, item)
-			}
-		}
-		filtered[i].Content = content
-	}
-	return filtered
-}
-
 type responsesSSEEvent struct {
 	EventType string
 	Data      string
@@ -956,6 +1052,7 @@ type responsesStreamEvent struct {
 	Type         string               `json:"type"`
 	Response     *responsesResponse   `json:"response,omitempty"`
 	Error        *responsesError      `json:"error,omitempty"`
+	Code         json.RawMessage      `json:"code,omitempty"`
 	Message      string               `json:"message,omitempty"`
 	Delta        string               `json:"delta,omitempty"`
 	ContentIndex int                  `json:"content_index,omitempty"`
@@ -1089,26 +1186,42 @@ func parseResponsesSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*resp
 			completed.Output = mergeResponsesStreamOutput(completed.Output, outputItems)
 		case "response.failed":
 			if event.Response != nil && event.Response.Error != nil {
-				return fmt.Errorf("response failed: %s", event.Response.Error.Message)
+				return newResponsesRequestError(
+					fmt.Errorf("response failed: %s", event.Response.Error.Message),
+					responsesErrorRetryable(event.Response.Error),
+				)
 			}
-			return fmt.Errorf("response failed")
+			return newResponsesRequestError(errors.New("response failed"), true)
 		case "error":
-			if event.Error != nil && event.Error.Message != "" {
-				return fmt.Errorf("stream error event: %s", event.Error.Message)
+			apiErr := event.Error
+			if apiErr != nil {
+				merged := *apiErr
+				if merged.Message == "" {
+					merged.Message = event.Message
+				}
+				if codeMissing(merged.Code) {
+					merged.Code = event.Code
+				}
+				apiErr = &merged
+			} else if event.Message != "" || len(event.Code) > 0 {
+				apiErr = &responsesError{Message: event.Message, Code: event.Code}
 			}
-			if event.Message != "" {
-				return fmt.Errorf("stream error event: %s", event.Message)
+			message := sse.Data
+			if apiErr != nil && apiErr.Message != "" {
+				message = apiErr.Message
 			}
-			return fmt.Errorf("stream error event: %s", sse.Data)
+			return newResponsesRequestError(
+				fmt.Errorf("stream error event: %s", message),
+				responsesErrorRetryable(apiErr),
+			)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	// Only after a clean end: a stream that errored is retried from the top,
-	// so emitting its held remnant would add a fragment to text the retry
-	// replays in full.
+	// Only after a clean end: an errored stream has no complete response to
+	// finalize, and retryable failures may replay the text from the top.
 	if onStream != nil {
 		for _, delta := range citeFilter.FinishAll() {
 			onStream(delta)
@@ -1152,6 +1265,11 @@ func mergeResponsesStreamOutput(final []responsesOutputItem, streamed map[int]re
 	return final
 }
 
+func codeMissing(code json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(code)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
 func shouldRetryResponsesDecodeError(err error, body []byte) bool {
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -1180,10 +1298,11 @@ func (s *ResponsesService) ConfigDetails() map[string]string {
 	model := cmp.Or(s.Model, DefaultModel)
 	baseURL := cmp.Or(s.ModelURL, model.URL, OpenAIURL)
 	return map[string]string{
-		"base_url":        baseURL,
-		"model_name":      model.ModelName,
-		"full_url":        baseURL + "/responses",
-		"api_key_env":     model.APIKeyEnv,
-		"has_api_key_set": fmt.Sprintf("%v", s.APIKey != ""),
+		"base_url":         baseURL,
+		"model_name":       model.ModelName,
+		"full_url":         baseURL + "/responses",
+		"api_key_env":      model.APIKeyEnv,
+		"has_api_key_set":  fmt.Sprintf("%v", s.APIKey != ""),
+		"reasoning_replay": string(s.ReasoningReplay),
 	}
 }

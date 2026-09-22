@@ -3,6 +3,7 @@ package claudetool
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -101,27 +102,20 @@ func isNoTrailerSet() bool {
 const (
 	bashName        = "bash"
 	bashDescription = `Executes shell commands via bash --login -c, returning combined stdout/stderr.
-Bash state changes (working dir, variables, aliases) don't persist between calls.
+Shell state (cwd, variables, aliases) does not persist; use change_dir for cwd.
 
 For long-running processes (servers, watch modes), use tmux instead.
 Do NOT use &, nohup, or disown — the bash tool kills its process group on exit.
 
-To wake yourself later (longer than the 15-min cap), detach a tmux session that
-sleeps then calls the Shelley client. Use double quotes so THIS shell expands
-$SHELLEY_CONVERSATION_ID (tmux's server env may be stale):
-  tmux new-session -d "sleep 3600 && shelley client chat -c $SHELLEY_CONVERSATION_ID -p 'Resume: <what next>'"
+For delayed wakeups or scheduled tasks, use the schedule skill.
 
-MUST set slow_ok=true for potentially slow commands: builds, downloads,
-installs, tests, or any other substantive operation.
+Set slow_ok=true for potentially slow commands (increases timeout).
 
-Avoid overly destructive cleanup commands. Commands that could delete .git
-directories, home directories, or use broad wildcards require explicit paths.
-Confirm with the user before running destructive operations.
+Destructive commands (deleting .git, home directories, broad wildcards, etc) require
+explicit paths and user confirmation.
 
-Use the change_dir tool instead of 'cd <path> && ...'; 'cd' does not persist across calls.
-
-IMPORTANT: Keep commands concise. The command input must be less than 60k tokens.
-For complex scripts, write them to a file first and then execute the file.
+Keep commands under a dozen lines, excluding file contents. For complex scripts,
+write a file and run it; both can share one call.
 `
 	// If you modify this, update the termui template for prettier rendering.
 	bashInputSchema = `
@@ -150,6 +144,7 @@ type bashInput struct {
 // BashDisplayData is the display data sent to the UI for bash tool results.
 type BashDisplayData struct {
 	WorkingDir string `json:"workingDir"`
+	ExitCode   *int   `json:"exitCode,omitempty"`
 }
 
 func (i *bashInput) timeout(t *Timeouts) time.Duration {
@@ -201,8 +196,17 @@ func (b *BashTool) run(ctx context.Context, req bashInput) llm.ToolOut {
 
 	out, execErr := b.executeBashInDir(ctx, req, timeout, wd)
 	if execErr != nil {
-		return llm.ErrorToolOut(execErr)
+		var exitErr *exec.ExitError
+		if errors.As(execErr, &exitErr) && exitErr.ProcessState.Exited() {
+			exitCode := exitErr.ExitCode()
+			display.ExitCode = &exitCode
+		}
+		toolOut := llm.ErrorToolOut(execErr)
+		toolOut.Display = display
+		return toolOut
 	}
+	exitCode := 0
+	display.ExitCode = &exitCode
 	if paths := bashkit.ChainedCdPaths(req.Command); len(paths) > 0 {
 		out = chainedCdHint(paths, wd) + "\n\n" + out
 	}

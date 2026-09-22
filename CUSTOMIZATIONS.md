@@ -1,6 +1,61 @@
 # This fork's customization workflow
 
-## Branches
+## Current policy: upstream application, preserved operations (September 22, 2026)
+
+The owner approved replacing all fork application differences with upstream,
+while retaining append-only `custom` history and first-boot provisioning.
+The reviewed upstream tip is `275d26e1d84e8b09e51595102bbc9b3c2464da81`.
+File completion landed as `b66c6020821b4e7697bbac442a99cd1d3c79064f`
+(PR #280 was closed after landing separately); keyboard PR #281 merged as
+`96e2822afb65008ff92f97e899dd220aa3ed8554` on September 21, 2026.
+
+The adoption commit has two parents: previous published `custom`
+`7ec7b6ec8093244494b9ab77a404aa2a032141fb` and that upstream tip. Its
+application, tests, schema, dependencies, and upstream build scripts come
+verbatim from upstream, not from an automatic conflict resolution. Previous
+fork application experiments are intentionally retired, including tool pills,
+keyword search, and the old completion reference format. Historical feature
+and packaging notes below are archival; this section supersedes their active
+branch/behavior instructions.
+
+Only these fork-owned paths differ from upstream: `AGENTS.md`, this document,
+`.shelley-features`, `.shelley-browser-tests`, the two `*_PR.md` records,
+`HISTORY_REDACTION.md`, `docs/mobile-keyboard-input.md`, the two keyboard PR
+images in `docs/pr-assets/`, and the ten provisioning/sync scripts or systemd
+templates under `scripts/`. Verify with `git diff --name-status
+275d26e1d84e8b09e51595102bbc9b3c2464da81 HEAD`; no application file may appear.
+Keep `.shelley-features` empty. Its retired branches have been deleted remotely;
+leaving them enabled makes sync fail before validation. The browser gate still
+covers file completion, mobile keyboard policy, and desktop input alignment
+using upstream's own tests.
+
+Do not reset, rebase, or force-push `custom`. Future upstream updates use the
+existing tested merge job, now with no feature branches. It publishes source,
+not deployments. Pause its timer during manual publication, validate in a
+separate clone, push normally, fast-forward the canonical checkout, and resume
+the timer. A failed test blocks publication and installation; retain logs and
+the previous deployed build rather than modifying upstream to force a pass.
+
+The existing account loader URL and `scripts/provision-exe-vm.sh` remain intact,
+so future exeuntu VMs build/test this upstream-equivalent application without
+another account-setting change. This preserves bootstrap availability; pointing
+`custom` directly to upstream would delete the downloaded installer. No new VM
+or account read-back is implied by repository validation. New VMs still require
+network/build dependencies, use public fetches, and gain no GitHub write grant.
+
+Build with `make build-custom` and run `scripts/validate-custom.sh` before
+publication. The customized stamp reflects the operational wrapper and preserved
+history, not runtime patches. Before installing on this VM, save the previous
+binary under `/usr/local/lib/shelley-backups/` and take an online SQLite backup
+under a private `~/.local/state/shelley-deploy/` directory. Preserve credentials
+and service configuration separately; neither belongs in Git. Use the resumable
+exit endpoint after atomic binary installation, then verify the running SHA.
+If rollback is needed after a schema upgrade, stop the service/socket first and
+restore the matching database backup and binary together; restoring the database
+loses post-backup messages. Never blindly overwrite a live database. Installer
+and sync recovery procedures below remain applicable.
+
+## Branches (historical feature integration)
 
 - `origin/main` is official `boldsoftware/shelley`; `fork/main` is its
   fast-forward-only mirror on `swaroopch/shelley`.
@@ -234,14 +289,10 @@ review. The keyboard review integration itself changes only fork documentation.
 
 ## Path reference convention
 
-Keep **JSON-escaped double quotes**, not Markdown backticks, around paths
-inserted by `@` completion. This is the user's agreed preference for both
-files and folders: it clearly delimits spaces and consistently escapes quotes,
-backslashes, and unusual characters. Folder paths retain their trailing `/`.
-These are prompt-text references, not attachments, automatic reads, or a
-promise of shell-safe quoting. Do not change to backticks just for presentation.
-The implementation and tests live on `file-name-completion`; restoring `custom`
-restores this convention without any additional VM settings.
+As of the September 22, 2026 upstream-only adoption, completion follows upstream
+verbatim: cwd-relative `@path` references, quoting only when token delimiters
+require it. This deliberately supersedes the fork's former always-double-quoted
+absolute-path convention. Do not restore that old behavior as a merge resolution.
 
 ## New VMs: first-boot installation
 

@@ -111,8 +111,10 @@ export interface Model {
   id: string;
   display_name?: string;
   source?: string; // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+  mode?: string; // exe.dev integration mode (chatgpt, managed, byok); absent when unknown
   base_url?: string;
   api_type?: string;
+  api_model_name?: string; // Native wire name, used with base_url to identify recorded usage
   ready: boolean;
   max_context_tokens?: number;
   is_default?: boolean;
@@ -399,7 +401,6 @@ export function isCompactionCarried(message: Message): boolean {
 export interface QueuedTranscription {
   media_path: string;
   contact_sheet_path?: string;
-  child_conversation_id: string;
   context?: string;
 }
 
@@ -412,6 +413,7 @@ export interface QueuedMessage {
   llm?: LLMMessage;
   created_at: string;
   model: string;
+  user_data?: unknown;
   kind?: QueuedMessageKind;
   state?: QueuedMessageState;
   transcription?: QueuedTranscription;

@@ -1,7 +1,6 @@
 <!-- Vue port of components/SubagentTool.tsx.
      Preserves: .tool, .tool-header, .tool-summary, .tool-emoji ⚡, .tool-name,
-     .tool-badge, .subagent-model-badge, .tool-error,
-     .tool-success, .tool-command, .tool-toggle, .tool-details, .tool-section,
+     .tool-badge, .subagent-model-badge, .tool-command, .tool-toggle, .tool-details, .tool-section,
      .tool-label, .tool-code, .tool-time, .subagent-link,
      data-testid tool-call-running/completed.
 
@@ -22,8 +21,6 @@
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">⚡</span>
         <span class="tool-name">subagent</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
         <span class="tool-command" :title="prompt">{{ commandText }}</span>
       </div>
       <button
@@ -61,7 +58,7 @@
 
       <div v-if="isComplete" class="tool-section">
         <div class="tool-label">
-          Response:
+          Response{{ hasError ? " (Error)" : "" }}:
           <span v-if="executionTime" class="tool-time">{{ executionTime }}</span>
         </div>
         <div :class="`tool-code ${hasError ? 'error' : ''}`">
@@ -82,12 +79,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import { useSubagentLive, navigateToConversationSlug } from "../../composables/subagentLive";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 interface SubagentInput {
   slug?: string;
@@ -106,7 +101,7 @@ const props = defineProps<{
   displayData?: { slug?: string; conversation_id?: string; status?: string };
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const input = computed<SubagentInput>(() =>
   typeof props.toolInput === "object" && props.toolInput !== null

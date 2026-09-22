@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createConversationViaAPI, openToolPill } from './helpers';
+import { createConversationViaAPI } from './helpers';
 
 test.describe('ANSI escape sequence rendering', () => {
   test('bash output with ANSI colors renders styled text, not raw escapes', async ({ page, request }) => {
@@ -9,11 +9,10 @@ test.describe('ANSI escape sequence rendering', () => {
     await page.goto(`/c/${slug}`);
     await page.waitForLoadState('domcontentloaded');
 
-    // Bash tool calls render as compact pills; opening the pill
-    // surfaces the full BashTool view in a modal.
-    const modal = await openToolPill(page, 'printf');
-    const bashTool = modal.locator('.bash-tool');
+    // The bash card renders inline, collapsed; expanding it shows the output.
+    const bashTool = page.locator('.bash-tool[data-testid="tool-call-completed"]').first();
     await expect(bashTool).toBeVisible({ timeout: 15000 });
+    await bashTool.locator('.bash-tool-header').click();
     const details = bashTool.locator('.bash-tool-details');
     await expect(details).toBeVisible();
 
@@ -76,9 +75,9 @@ test.describe('ANSI escape sequence rendering', () => {
     // Scope to the specific bash tool for this test's echo command to avoid
     // strict-mode violations if the shared test server ends up showing more
     // than one bash invocation.
-    const modal = await openToolPill(page, 'echo');
-    const bashTool = modal.locator('.bash-tool').filter({ hasText: 'just plain text with no escapes' }).first();
+    const bashTool = page.locator('.bash-tool').filter({ hasText: 'just plain text with no escapes' }).first();
     await expect(bashTool).toBeVisible({ timeout: 15000 });
+    await bashTool.locator('.bash-tool-header').click();
     const details = bashTool.locator('.bash-tool-details');
     await expect(details).toBeVisible();
 
@@ -110,9 +109,9 @@ test.describe('ANSI escape sequence rendering', () => {
     await page.goto(`/c/${slug}`);
     await page.waitForLoadState('domcontentloaded');
 
-    const modal = await openToolPill(page, 'printf');
-    const bashTool = modal.locator('.bash-tool').filter({ hasText: 'Dev code has changes' }).first();
+    const bashTool = page.locator('.bash-tool').filter({ hasText: 'Dev code has changes' }).first();
     await expect(bashTool).toBeVisible({ timeout: 15000 });
+    await bashTool.locator('.bash-tool-header').click();
     const details = bashTool.locator('.bash-tool-details');
     await expect(details).toBeVisible();
 

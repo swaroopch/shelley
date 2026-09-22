@@ -1,7 +1,7 @@
 <!-- Vue port of components/LLMOneShotTool.tsx.
      Preserves: .tool, .tool-header, .tool-summary, .tool-emoji 🤖, .tool-name,
      .tool-command, .tool-toggle, .tool-details, .tool-section, .tool-label,
-     .tool-code, .tool-time, .tool-error, .tool-success,
+     .tool-code, .tool-time,
      data-testid tool-call-running/completed. -->
 <template>
   <div class="tool" :data-testid="isComplete ? 'tool-call-completed' : 'tool-call-running'">
@@ -9,8 +9,6 @@
       <div class="tool-summary">
         <span class="tool-emoji" :class="{ running: isRunning }">🤖</span>
         <span class="tool-name">llm_one_shot</span>
-        <ToolStatusIcon v-if="isComplete && hasError" state="error" class="tool-error" />
-        <ToolStatusIcon v-if="isComplete && !hasError" state="ok" class="tool-success" />
         <span class="tool-command">{{ summary }}</span>
       </div>
       <button
@@ -71,12 +69,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { LLMContent } from "../../../types";
-import { useToolExpanded } from "../../composables/toolDetail";
 import CommentableImage from "../CommentableImage.vue";
 import ToolChevron from "./ToolChevron.vue";
-import ToolStatusIcon from "./ToolStatusIcon.vue";
 
 interface LLMOneShotInput {
   prompt_files?: string[] | string;
@@ -109,7 +105,7 @@ const props = defineProps<{
   display?: unknown; // Display data from the tool_result Content
 }>();
 
-const isExpanded = useToolExpanded();
+const isExpanded = ref(false);
 
 const input = computed<LLMOneShotInput>(() =>
   typeof props.toolInput === "object" && props.toolInput !== null

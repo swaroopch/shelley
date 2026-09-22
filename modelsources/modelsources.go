@@ -199,6 +199,7 @@ func Build(catalog []models.Model, sources []Source, httpc *http.Client, logger 
 					ID:           id,
 					DisplayName:  id,
 					Provider:     models.Provider(m.Provider),
+					Mode:         m.ExeDev.Mode,
 					Source:       integrationSourceLabel(src.label, models.Provider(m.Provider)),
 					ReleaseDate:  modelReleaseDate(src.integration.URL, m.apiModelName()),
 					Service:      svc,
@@ -239,6 +240,25 @@ func Build(catalog []models.Model, sources []Source, httpc *http.Client, logger 
 				APIModelName: m.APIModelName,
 			})
 			logger.Debug("Materialized model", "id", id, "source", label)
+		}
+	}
+	return out
+}
+
+// TranscriptionModels returns the exact audio transcription routes advertised
+// by discovered LLM integrations.
+func TranscriptionModels(sources []Source) []models.TranscriptionModel {
+	var out []models.TranscriptionModel
+	for _, src := range sources {
+		if src.integration == nil {
+			continue
+		}
+		for _, model := range src.integration.TranscriptionModels {
+			out = append(out, models.TranscriptionModel{
+				Model:    model.apiModelName(),
+				Endpoint: strings.TrimSuffix(src.integration.URL, "/") + "/v1/audio/transcriptions",
+				Source:   src.integration.Host,
+			})
 		}
 	}
 	return out
@@ -429,6 +449,11 @@ type IntegrationModel struct {
 	NativeID     string                       `json:"native_id,omitempty"`
 	APIs         []string                     `json:"apis,omitempty"`
 	Architecture IntegrationModelArchitecture `json:"architecture,omitempty"`
+	ExeDev       IntegrationModelExeDev       `json:"exe_dev"`
+}
+
+type IntegrationModelExeDev struct {
+	Mode string `json:"mode"`
 }
 
 type IntegrationModelArchitecture struct {
@@ -463,6 +488,10 @@ type LLMIntegrationConfig struct {
 	// Models is the set of models the integration serves, in the order
 	// returned by models.json.
 	Models []IntegrationModel
+
+	// TranscriptionModels are audio models advertised through the OpenAI
+	// transcription API. They are not materialized as chat services.
+	TranscriptionModels []IntegrationModel
 }
 
 // LLMIntegrationDiscoveryResult distinguishes "no LLM integration was found"
@@ -565,16 +594,18 @@ func loadLLMIntegration(ctx context.Context, httpc *http.Client, logger *slog.Lo
 		return nil, false
 	}
 	models := integrationModelsFromCatalog(catalog)
-	if len(models) == 0 {
+	transcriptionModels := transcriptionModelsFromCatalog(catalog)
+	if len(models) == 0 && len(transcriptionModels) == 0 {
 		logger.Warn("LLM integration discovery: models.json returned no supported models; skipping", "name", integ.Name, "host", host)
 		return nil, true
 	}
-	logger.Info("Discovered exe.dev LLM integration", "name", integ.Name, "host", host, "models", len(models))
+	logger.Info("Discovered exe.dev LLM integration", "name", integ.Name, "host", host, "models", len(models), "transcription_models", len(transcriptionModels))
 	return &LLMIntegrationConfig{
-		Name:   integ.Name,
-		Host:   host,
-		URL:    base,
-		Models: models,
+		Name:                integ.Name,
+		Host:                host,
+		URL:                 base,
+		Models:              models,
+		TranscriptionModels: transcriptionModels,
 	}, true
 }
 
@@ -588,6 +619,19 @@ func integrationModelsFromCatalog(catalog llmIntegrationModelCatalog) []Integrat
 			continue
 		}
 		out = append(out, model)
+	}
+	return out
+}
+
+func transcriptionModelsFromCatalog(catalog llmIntegrationModelCatalog) []IntegrationModel {
+	if catalog.SchemaVersion != 1 {
+		return nil
+	}
+	var out []IntegrationModel
+	for _, model := range catalog.Models {
+		if model.ID != "" && model.apiModelName() != "" && slices.Contains(model.APIs, "openai_transcriptions") {
+			out = append(out, model)
+		}
 	}
 	return out
 }
