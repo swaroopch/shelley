@@ -89,10 +89,12 @@ for (const width of [393, 1280]) {
     await expect(popup.getByTestId("token-cost-total")).toContainText("≈$0.011");
 
     const breakdown = () =>
-      popup.locator(".token-cost-graph > .token-cost-legend").evaluate((legend) => {
+      popup.getByRole("table", { name: "Spend by model" }).evaluate((legend) => {
         const result: Record<string, { label: string; tokens: string }[]> = {};
         let model = "";
-        for (const row of legend.children) {
+        for (const row of legend.querySelectorAll(
+          ".token-cost-model-row, .token-cost-legend-row",
+        )) {
           if (row.matches(".token-cost-model-row")) {
             model = row.querySelector(".token-cost-model-name")!.textContent!.trim();
             result[model] = [];
