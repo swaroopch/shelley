@@ -68,6 +68,107 @@ function exactQueryToken(editor: Locator, kind: "tag" | "user", raw: string) {
 }
 
 test.describe("conversation drawer startup and app bar", () => {
+  test("highlights matching slug text in drawer and command-palette searches", async ({ page }) => {
+    const slugHit = conversation("Pelican-project-pelican");
+    const messageHit = conversation("message-only");
+    slugHit.tags = messageHit.tags = '["birds"]';
+    messageHit.search_snippet = "A \x02pelican\x03 by the bay";
+    const conversations = [slugHit, messageHit];
+    await stubConversationList(page, conversations);
+    await page.goto("/new");
+
+    const title = page.locator(
+      '[data-conversation-id="Pelican-project-pelican"] .conversation-title',
+    );
+    const messageTitle = page.locator('[data-conversation-id="message-only"] .conversation-title');
+    await expect(title).toHaveText("Pelican-project-pelican");
+    await expect(title.locator("mark")).toHaveCount(0);
+    await page.getByRole("button", { name: "Search conversations..." }).click();
+    const editor = queryEditor(page);
+    await editor.fill("PELICAN tag:birds ");
+    await expect(title.locator("mark")).toHaveText(["Pelican", "pelican"]);
+    await expect(title).toHaveText("Pelican-project-pelican");
+    await expect(messageTitle.locator("mark")).toHaveCount(0);
+    await expect(page.locator(".conversation-snippet mark")).toHaveText(["pelican"]);
+
+    await editor.fill("project");
+    await expect(title.locator("mark")).toHaveText(["project"]);
+    await editor.fill("");
+    await expect(title.locator("mark")).toHaveCount(0);
+
+    await page.keyboard.press("ControlOrMeta+k");
+    const paletteInput = page.locator(".command-palette-input");
+    await paletteInput.fill("PELICAN");
+    const paletteTitle = page.locator(".command-palette-item-title").filter({
+      hasText: "Pelican-project-pelican",
+    });
+    await expect(paletteTitle.locator("mark")).toHaveText(["Pelican", "pelican"]);
+    await expect(paletteTitle).toHaveText("Pelican-project-pelican");
+    await expect(
+      page
+        .locator(".command-palette-item-title")
+        .filter({ hasText: "message-only" })
+        .locator("mark"),
+    ).toHaveCount(0);
+    await paletteInput.fill("conversation");
+    const actions = page.locator(".command-palette-item").filter({
+      has: page.locator(".command-palette-item-badge"),
+    });
+    await expect(actions.first()).toBeVisible();
+    await expect(actions.locator("mark")).toHaveCount(0);
+    await paletteInput.fill("");
+    await expect(paletteTitle.locator("mark")).toHaveCount(0);
+  });
+
+  test("command palette uses indexed search and cancels superseded requests", async ({ page }) => {
+    const recent = conversation("recent");
+    const slugHit = conversation("needle-archived");
+    slugHit.archived = true;
+    const messageHit = conversation("message-only");
+    await stubConversationList(page, [recent]);
+    const searches: string[] = [];
+    const legacySearches: string[] = [];
+    await page.route("**/api/conversations?**", (route) => {
+      legacySearches.push(route.request().url());
+      return route.fulfill({ json: [] });
+    });
+    await page.route("**/api/conversations/search**", (route) => {
+      const query = new URL(route.request().url()).searchParams.get("q")!;
+      searches.push(query);
+      if (query === "slow" || query === "cleared") return;
+      return route.fulfill({ json: [slugHit, messageHit] });
+    });
+    await page.goto("/new");
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.locator(".command-palette-input");
+    const titles = page.locator(".command-palette-item-title");
+    await expect(titles.filter({ hasText: "recent" })).toBeVisible();
+
+    const slowRequest = page.waitForRequest(
+      (request) => new URL(request.url()).searchParams.get("q") === "slow",
+    );
+    await input.fill("slow");
+    const slow = await slowRequest;
+    const slowCancelled = page.waitForEvent("requestfailed", (request) => request === slow);
+    await input.fill(" needle ");
+    await slowCancelled;
+    await expect(titles).toHaveText(["needle-archived", "message-only"]);
+    await expect(titles.first().locator("mark")).toHaveText(["needle"]);
+
+    const pendingRequest = page.waitForRequest(
+      (request) => new URL(request.url()).searchParams.get("q") === "cleared",
+    );
+    await input.fill("cleared");
+    const pending = await pendingRequest;
+    const pendingCancelled = page.waitForEvent("requestfailed", (request) => request === pending);
+    await input.fill("");
+    await pendingCancelled;
+    await expect(titles.filter({ hasText: "recent" })).toBeVisible();
+    await expect(titles.filter({ hasText: "needle-archived" })).toHaveCount(0);
+    expect(searches).toEqual(["slow", "needle", "cleared"]);
+    expect(legacySearches).toEqual([]);
+  });
+
   test("single-user lists have no participant filter", async ({ page }) => {
     await page.setExtraHTTPHeaders({ "X-ExeDev-Email": "me@example.com" });
     const mine = conversation("mine", false, ["me@example.com"]);
