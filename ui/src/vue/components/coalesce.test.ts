@@ -41,6 +41,63 @@ function serverToolUse(id: string): LLMContent {
   return { ID: id, Type: 7, ToolName: "web_search", ToolInput: {} } as LLMContent;
 }
 
+// A running tool has no result timestamp yet; once it completes, prefer the
+// tool's actual execution timestamps over the invocation message timestamp.
+{
+  const invocation = {
+    ...agentMessage([toolUse("elapsed-1")]),
+    created_at: "2026-09-24T12:00:00Z",
+  };
+  const running = coalesceMessages([invocation]);
+  check(
+    "running tool records invocation time without changing its result start time",
+    running.length === 1 &&
+      running[0].toolInvokedAt === invocation.created_at &&
+      running[0].toolStartTime === undefined &&
+      !running[0].hasResult,
+    running,
+  );
+
+  const result = {
+    ...agentMessage([
+      {
+        ID: "",
+        Type: 6,
+        ToolUseID: "elapsed-1",
+        ToolResult: [text("done")],
+        ToolUseStartTime: "2026-09-24T12:00:02Z",
+        ToolUseEndTime: "2026-09-24T12:00:05Z",
+      },
+    ]),
+    type: "user" as const,
+  };
+  const completed = coalesceMessages([invocation, result]);
+  check(
+    "completed tool uses actual execution time",
+    completed.length === 1 &&
+      completed[0].toolInvokedAt === invocation.created_at &&
+      completed[0].toolStartTime === "2026-09-24T12:00:02Z" &&
+      completed[0].toolEndTime === "2026-09-24T12:00:05Z" &&
+      completed[0].hasResult === true,
+    completed,
+  );
+}
+
+{
+  const invocation = {
+    ...agentMessage([serverToolUse("server-elapsed")]),
+    created_at: "2026-09-24T12:00:00Z",
+  };
+  const result = coalesceMessages([invocation])[0];
+  check(
+    "server-side tool keeps its timestamp placement",
+    result.toolInvokedAt === invocation.created_at &&
+      result.toolStartTime === undefined &&
+      result.hasResult === true,
+    result,
+  );
+}
+
 // --- Text + tool use: one message item and one tool item ---
 {
   const items = coalesceMessages([agentMessage([text("hello"), toolUse("t1")])]);
@@ -81,6 +138,66 @@ function serverToolUse(id: string): LLMContent {
 {
   const items = coalesceMessages([agentMessage([toolUse("t4")])]);
   check("tool only -> tool item only", items.length === 1 && items[0].type === "tool", items);
+}
+
+// --- A restart interruption resolves dangling tool calls ---
+{
+  const items = coalesceMessages([agentMessage([toolUse("interrupted")])], 1);
+  check(
+    "interrupted tool call is marked, not running",
+    items.length === 1 && items[0].type === "tool" && items[0].toolInterrupted === true,
+    items,
+  );
+  const resolved = coalesceMessages([agentMessage([toolUse("other")])], 2);
+  check(
+    "older-generation tool call is not marked",
+    resolved[0].toolInterrupted === false,
+    resolved,
+  );
+  const resultMessage = {
+    ...agentMessage([]),
+    type: "user",
+    user_data: JSON.stringify({ interrupted_tool_result: true }),
+    llm_data: JSON.stringify({
+      Content: [
+        {
+          Type: 6,
+          ToolUseID: "interrupted",
+          ToolError: true,
+          ToolResult: [{ Type: 2, Text: "Interrupted" }],
+        },
+      ],
+    }),
+  } as Message;
+  const reloaded = coalesceMessages([agentMessage([toolUse("interrupted")]), resultMessage]);
+  check(
+    "interrupted tool stays marked after reload without interrupted state",
+    reloaded[0].type === "tool" &&
+      reloaded[0].hasResult === true &&
+      reloaded[0].toolInterrupted === true &&
+      reloaded[0].toolResult?.[0]?.Text === "Interrupted",
+    reloaded,
+  );
+  const cancelled = {
+    ...resultMessage,
+    user_data: undefined,
+    llm_data: JSON.stringify({
+      Content: [
+        {
+          Type: 6,
+          ToolUseID: "interrupted",
+          ToolError: true,
+          ToolResult: [{ Type: 2, Text: "signal: terminated\n\nTool execution cancelled by user" }],
+        },
+      ],
+    }),
+  } as Message;
+  const stopped = coalesceMessages([agentMessage([toolUse("interrupted")]), cancelled]);
+  check(
+    "Stop leaves a durable interrupted label",
+    stopped[0].toolInterrupted === true && stopped[0].hasResult === true,
+    stopped,
+  );
 }
 
 // --- Text written after the tool calls renders after them ---

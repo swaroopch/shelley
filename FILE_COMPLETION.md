@@ -25,7 +25,7 @@ apply to completion immediately, before the server's persistence response.
 - Completion inserts a reference only: it does **not** read or attach contents.
 - Email addresses and shell-mode input do not trigger completion.
 
-Search reuses the existing two-phase `findFiles` flow used by the Command-Shift-P
+Search reuses the existing two-phase `findFiles` flow used by the Cmd/Ctrl+P
 file finder: a fast name request renders first, while a parallel Git content search
 adds matching snippets and content-only files when it finishes. Both requests are
 cancelled together when the token or context changes. The name phase opts into folders
@@ -45,6 +45,8 @@ Errors and empty results leave normal keyboard input available.
 ## Tests
 
 The regular UI unit suite (`pnpm test` from `ui/`) includes token parsing,
-insertion, quoting, cancellation, and stale-response tests. After building
-Shelley, run `pnpm exec playwright test e2e/file-completion.spec.ts` from `ui/`
-for end-to-end keyboard/mouse, draft-directory, and no-result/error checks.
+insertion, quoting, cancellation, and stale-response tests. The end-to-end
+keyboard/mouse, folder, content-search, and no-result checks are LazyCue
+browser tests (`TestNewPageFileCompletion*` in `test/lazycue_test.go`); after
+building the UI, run `LAZYCUE_INTEGRATION=1 go test ./test/ -run
+TestNewPageFileCompletion -count=1` from `shelley/`.

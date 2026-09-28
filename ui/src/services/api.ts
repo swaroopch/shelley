@@ -38,6 +38,14 @@ async function responseError(response: Response, prefix: string): Promise<ApiErr
   return new ApiError(`${prefix}: ${detail}`, response.status);
 }
 
+export interface SkillDescriptor {
+  name: string;
+  description: string;
+  activate: string;
+  source_path?: string;
+  origin?: string;
+}
+
 export interface AvailableModel {
   id: string;
   display_name?: string;
@@ -50,6 +58,31 @@ export interface AvailableModel {
   max_context_tokens?: number;
   is_default?: boolean;
   supports_images?: boolean;
+}
+
+export interface AttachedIntegration {
+  name: string;
+  type: string;
+  comment?: string;
+  help?: string;
+  team?: boolean;
+  url: string;
+  details?: {
+    repositories?: { name: string; url: string; clone_command: string }[];
+    model_counts?: {
+      provider: string;
+      mode?: string;
+      chat?: number;
+      embeddings?: number;
+      transcription?: number;
+      other?: number;
+    }[];
+    models_error?: string;
+  };
+}
+
+export interface IntegrationsResponse {
+  integrations: AttachedIntegration[];
 }
 
 export interface GitTourHeaderEntry {
@@ -131,6 +164,46 @@ class ApiService {
       throw new Error(`Failed to get models: ${response.statusText}`);
     }
     return response.json();
+  }
+
+  async getIntegrations(): Promise<IntegrationsResponse> {
+    const response = await fetch(`${this.baseUrl}/integrations`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to load integrations");
+    }
+    return response.json();
+  }
+
+  async getIntegrationDetails(name: string, team: boolean): Promise<AttachedIntegration> {
+    const params = new URLSearchParams({ details: name, team: String(team) });
+    const response = await fetch(`${this.baseUrl}/integrations?${params}`);
+    if (!response.ok) {
+      throw await responseError(response, "Failed to load integration details");
+    }
+    const body: IntegrationsResponse = await response.json();
+    return body.integrations[0];
+  }
+
+  async sendTestNotification(message: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/integrations/notify/test`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ message }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Could not send test notification");
+    }
+  }
+
+  async sendSlackTest(name: string, team: boolean, message: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/integrations/slack/test`, {
+      method: "POST",
+      headers: this.postHeaders,
+      body: JSON.stringify({ name, team, message }),
+    });
+    if (!response.ok) {
+      throw await responseError(response, "Could not send Slack test message");
+    }
   }
 
   async refreshModels(): Promise<AvailableModel[]> {
@@ -705,15 +778,21 @@ class ApiService {
     return response.json();
   }
 
+  // `oldPath` names the left-hand file when the commit renamed it; without it
+  // a renamed file comes back with empty old content.
   async getGitFileDiff(
     diffId: string,
     filePath: string,
     cwd: string,
     to?: string,
+    oldPath?: string,
   ): Promise<GitFileDiff> {
     const toParam = to ? `&to=${encodeURIComponent(to)}` : "";
+    const oldPathParam = oldPath ? `&oldPath=${encodeURIComponent(oldPath)}` : "";
+    // Encode per segment so names containing '#', '?' or '%' survive the URL.
+    const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
     const response = await fetch(
-      `${this.baseUrl}/git/file-diff/${diffId}/${filePath}?cwd=${encodeURIComponent(cwd)}${toParam}`,
+      `${this.baseUrl}/git/file-diff/${diffId}/${encodedPath}?cwd=${encodeURIComponent(cwd)}${toParam}${oldPathParam}`,
     );
     if (!response.ok) {
       throw new Error(`Failed to get file diff: ${response.statusText}`);
@@ -758,6 +837,18 @@ class ApiService {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.error || `Failed to create worktree: ${response.statusText}`);
     }
+    return response.json();
+  }
+
+  async getSkills(
+    cwd: string,
+    conversationId: string | null,
+    signal?: AbortSignal,
+  ): Promise<{ skills: SkillDescriptor[] }> {
+    const params = new URLSearchParams({ cwd });
+    if (conversationId) params.set("conversation_id", conversationId);
+    const response = await fetch(`${this.baseUrl}/skills?${params}`, { signal });
+    if (!response.ok) throw await responseError(response, "Failed to load skills");
     return response.json();
   }
 

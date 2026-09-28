@@ -143,6 +143,12 @@
             commandPaletteOpen = false;
           }
         "
+        @open-integrations-modal="
+          () => {
+            integrationsModalOpen = true;
+            commandPaletteOpen = false;
+          }
+        "
         @open-notifications-modal="
           () => {
             notificationsModalOpen = true;
@@ -170,6 +176,22 @@
           }
         "
         @models-changed="modelsRefreshTrigger++"
+      />
+
+      <IntegrationsModal
+        :is-open="integrationsModalOpen"
+        @open-models-modal="
+          () => {
+            integrationsModalOpen = false;
+            modelsModalOpen = true;
+          }
+        "
+        @close="
+          () => {
+            integrationsModalOpen = false;
+            focusMessageInputIfUnfocused();
+          }
+        "
       />
 
       <NotificationsModal
@@ -201,6 +223,7 @@
 
       <EditableFileModal
         v-if="editorFilePath"
+        :key="editorFilePath"
         :is-open="!!editorFilePath"
         :path="editorFilePath"
         :title="`Edit ${tildifyPath(editorFilePath)}`"
@@ -227,6 +250,7 @@ import { comboMatches, MENU_COMBOS } from "../utils/menuShortcuts";
 import ConversationDrawer from "./components/ConversationDrawer.vue";
 import CommandPalette from "./components/CommandPalette.vue";
 import ModelsModal from "./components/ModelsModal.vue";
+import IntegrationsModal from "./components/IntegrationsModal.vue";
 import NotificationsModal from "./components/NotificationsModal.vue";
 import FeatureFlagsModal from "./components/FeatureFlagsModal.vue";
 import FileFinderModal from "./components/FileFinderModal.vue";
@@ -341,6 +365,7 @@ const diffViewerTrigger = ref(0);
 const gitGraphTrigger = ref(0);
 const terminalTrigger = ref(0);
 const modelsModalOpen = ref(false);
+const integrationsModalOpen = ref(false);
 const notificationsModalOpen = ref(false);
 const featureFlagsModalOpen = ref(false);
 // Fuzzy file finder (Cmd/Ctrl+P) + the generic editor it opens.
@@ -797,7 +822,9 @@ const isMac = navigator.platform.toUpperCase().includes("MAC");
 function handleKeyDown(e: KeyboardEvent) {
   const recordingMode = comboMatches(e, MENU_COMBOS.recordAudio)
     ? "microphone"
-    : comboMatches(e, MENU_COMBOS.recordScreen) ? "screen" : null;
+    : comboMatches(e, MENU_COMBOS.recordScreen)
+      ? "screen"
+      : null;
   if (recordingMode) {
     if (e.defaultPrevented || isImeComposing(e)) return;
     e.preventDefault();
@@ -839,7 +866,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
   // Cmd/Ctrl+P opens the fuzzy file finder (overrides the browser's print
   // shortcut, which all major browsers let us preventDefault).
-  if (modifierPressed && !e.shiftKey && e.key === "p") {
+  if (comboMatches(e, MENU_COMBOS.editFile)) {
     e.preventDefault();
     fileFinderOpen.value = true;
     return;

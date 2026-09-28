@@ -19,6 +19,7 @@
          (e: "draft-change", value: string): void
          (e: "draft-send-started"): void
          (e: "draft-cleared"): void
+         (e: "recording-unsent", path: string, error: unknown): void
        Because send/queue are awaited in React (onSend/onQueue return
        Promises), the parent passes async handlers via the `onSend`/`onQueue`
        *function props* below instead of pure emits — Vue emits can't be
@@ -27,7 +28,7 @@
        use the `:on-send` / `:on-queue` function props. -->
 <template>
   <div
-    :class="`message-input-container ${isDraggingOver ? 'drag-over' : ''} ${isShellMode ? 'shell-mode' : ''} ${showSlashMenu || showFileMenu ? 'slash-menu-open' : ''}`"
+    :class="`message-input-container ${isDraggingOver ? 'drag-over' : ''} ${isShellMode ? 'shell-mode' : ''} ${showSlashMenu || showFileMenu || showSkillMenu ? 'slash-menu-open' : ''}`"
     @dragover="handleDragOver"
     @dragenter="handleDragEnter"
     @dragleave="handleDragLeave"
@@ -48,7 +49,8 @@
           type="button"
           class="recording-return"
           data-testid="recording-return-button"
-          @click="recordingSubmission?.destination?.returnTo()"
+          :disabled="!!recordingSubmission?.destinationError"
+          @click="returnToRecording"
         >
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 10-5-5 5-5M4 5h10a6 6 0 0 1 0 12h-3" />
@@ -57,9 +59,13 @@
         </button>
         <RecordingPanel
           :initial-mode="recordingSubmission!.mode"
+          :initial-microphone="recordingSubmission?.microphone"
           :initial-screen="recordingSubmission?.screen"
           :preserved-text="recordingSubmission?.message"
-          :on-complete="handleRecordingComplete"
+          :destination-error="recordingSubmission?.destinationError"
+          :submitting="recordingSubmission?.submitting"
+          :on-complete="completionFor(recordingSubmission!)"
+          :on-upload-failure="reportUnsentRecording"
           @close="closeRecording"
         />
       </div>
@@ -125,6 +131,52 @@
         </div>
       </div>
       <div class="textarea-wrapper">
+        <div
+          v-if="showSkillMenu"
+          ref="skillMenuRef"
+          class="slash-command-menu skill-completion-menu"
+          data-testid="skill-picker"
+        >
+          <div class="file-completion-status">
+            Skills · Select to add editable instructions, not send
+          </div>
+          <div v-if="skillLoading || skillError" class="file-completion-status" role="status">
+            {{ skillError || "Loading skills…" }}
+          </div>
+          <div :id="skillMenuId" role="listbox" aria-label="Skills">
+            <button
+              v-for="(item, index) in skillMatches"
+              :id="`${skillMenuId}-${index}`"
+              :key="item.name"
+              type="button"
+              tabindex="-1"
+              :class="[
+                'slash-command-item',
+                'skill-completion-item',
+                { selected: index === skillSelected },
+              ]"
+              role="option"
+              :aria-selected="index === skillSelected"
+              :aria-label="`${item.name}: ${item.description}${item.source_path || item.origin ? ` (${item.source_path || item.origin})` : ''}`"
+              @mousedown.prevent
+              @mouseenter="skillSelected = index"
+              @click="chooseSkill(index)"
+            >
+              <span class="slash-command-name">{{ item.name }}</span>
+              <span class="slash-command-description">{{ item.description }}</span>
+              <span v-if="item.source_path || item.origin" class="skill-completion-source">
+                {{ [item.origin, item.source_path].filter(Boolean).join(" · ") }}
+              </span>
+            </button>
+          </div>
+          <div
+            v-if="!skillLoading && !skillError && !skillMatches.length"
+            class="file-completion-status"
+            role="status"
+          >
+            No matching skills
+          </div>
+        </div>
         <div
           v-if="showFileMenu"
           ref="fileMenuRef"
@@ -276,16 +328,23 @@
           :rows="initialRows ?? 1"
           aria-label="Message input"
           data-testid="message-input"
-          :aria-autocomplete="showFileMenu ? 'list' : undefined"
-          :aria-controls="showFileMenu ? fileMenuId : undefined"
+          :aria-autocomplete="showSkillMenu || showFileMenu ? 'list' : undefined"
+          :aria-controls="showSkillMenu ? skillMenuId : showFileMenu ? fileMenuId : undefined"
           :aria-activedescendant="
-            showFileMenu && fileMatches.length ? `${fileMenuId}-${fileSelected}` : undefined
+            showSkillMenu && skillMatches.length
+              ? `${skillMenuId}-${skillSelected}`
+              : showFileMenu && fileMatches.length
+                ? `${fileMenuId}-${fileSelected}`
+                : undefined
           "
           @input="onTextareaInput"
           @select="syncFileSelection"
           @click="syncFileSelection"
           @keyup="syncFileSelection"
-          @blur="fileFocused = false"
+          @blur="
+            fileFocused = false;
+            skillFocused = false;
+          "
           @keydown="handleKeyDown"
           @paste="handlePaste"
           @focus="onTextareaFocus"
@@ -317,28 +376,17 @@
           </svg>
         </button>
         <button
-          v-if="recordingSubmission && !recordingActive"
-          type="button"
-          class="btn btn-secondary"
-          data-testid="recording-pending-cancel-button"
-          @click="closeRecording"
-        >
-          {{ t("cancel") }}
-        </button>
-        <button
           v-if="mediaRecordingAvailable"
           type="button"
           :disabled="!canRecordAudio"
-          :aria-busy="!!recordingSubmission && !recordingActive"
           class="message-voice-btn"
           :aria-label="t('recordingTitle')"
           :title="`${t('recordingTitle')} (${menuShortcutLabel('recordAudio')})`"
           data-testid="voice-button"
           @click="beginRecording('microphone')"
         >
-          <span v-if="recordingSubmission && !recordingActive" class="spinner spinner-small" />
           <svg
-            v-else-if="screenRecordingAvailable"
+            v-if="screenRecordingAvailable"
             fill="none"
             stroke="currentColor"
             stroke-width="1.8"
@@ -510,8 +558,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, useId, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowReactive,
+  shallowRef,
+  useId,
+  watch,
+} from "vue";
 import { useFileCompletion } from "../composables/fileCompletion";
+import { useSkillCompletion } from "../composables/skillCompletion";
 import { useI18n } from "../composables/i18n";
 import { pickPlaceholderHint } from "../../utils/placeholderHints";
 import HighlightedText from "./HighlightedText.vue";
@@ -525,7 +584,12 @@ import {
 } from "./composerDispatch";
 import { isImeComposing } from "../../utils/imeComposing";
 import RecordingPanel from "./RecordingPanel.vue";
-import type { RecordingDestination, RecordingMode } from "./recordingDestination";
+import type {
+  RecordingDestination,
+  RecordingMode,
+  RecordingPreparation,
+} from "./recordingDestination";
+import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
 import { menuShortcutLabel } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
@@ -553,8 +617,8 @@ const props = withDefaults(
   defineProps<{
     /** Async send handler (awaited). Mirrors React's onSend prop. */
     onSend: (message: string) => Promise<void> | void;
-    /** Reserve the original destination before acquiring media. */
-    onStartRecording: (text: string) => Promise<RecordingDestination>;
+    /** Bind the original destination; the recorder starts while it resolves. */
+    onStartRecording: (text: string) => RecordingPreparation;
     /** Archived conversations hide the composer, but not an active recording. */
     recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
@@ -617,6 +681,7 @@ const emit = defineEmits<{
   (e: "draft-change", value: string): void;
   (e: "draft-send-started"): void;
   (e: "draft-cleared"): void;
+  (e: "recording-unsent", path: string, error: unknown): void;
 }>();
 
 const { t } = useI18n();
@@ -630,21 +695,32 @@ const sendSelectedLevel = ref<ContextUsageLevel>("");
 const message = ref(props.draftSeed?.value ?? "");
 type RecordingSubmission = {
   mode: RecordingMode;
+  microphone?: Promise<MediaStream>;
   screen?: Promise<MediaStream>;
-  destination?: RecordingDestination;
+  preparation: RecordingPreparation;
+  destination: Promise<RecordingDestination>;
+  destinationError?: string;
+  submitting?: boolean;
+  // The recorder renders inline in its origin until the destination resolves,
+  // unless the user has navigated away meanwhile.
+  origin: string | null;
+  detached?: boolean;
+  conversationId?: string;
   message: string;
   context: string;
   attachmentIDs: string[];
   attachmentSession: AttachmentSession;
 };
 const recordingSubmission = shallowRef<RecordingSubmission | null>(null);
-const recordingActive = computed(() => !!recordingSubmission.value?.destination);
-const recordingFloating = computed(
-  () =>
-    recordingActive.value &&
-    (props.conversationId !== recordingSubmission.value?.destination?.conversationId ||
-      !props.recordingInlineAvailable),
-);
+let disposed = false;
+const recordingActive = computed(() => !!recordingSubmission.value);
+const recordingFloating = computed(() => {
+  const submission = recordingSubmission.value;
+  if (!submission) return false;
+  if (!props.recordingInlineAvailable) return true;
+  const target = submission.conversationId ?? (submission.detached ? undefined : submission.origin);
+  return (props.conversationId ?? null) !== target;
+});
 // setMessage mirrors the React controlled-value path: surfaces every change via
 // draft-change so the parent can persist it.
 function setMessage(next: string | ((prev: string) => string)) {
@@ -720,75 +796,121 @@ const canRecordScreen = computed(() => canRecordAudio.value && screenRecordingAv
 
 defineExpose({ canRecordAudio, canRecordScreen, beginRecording });
 
-// Before the panel mounts, the composer owns the requested screen stream.
-function releasePendingScreen(submission: RecordingSubmission) {
-  if (submission.destination || !submission.screen) return;
-  void submission.screen.then(
-    (stream) => stream.getTracks().forEach((track) => track.stop()),
-    () => {}, // A rejected picker owns no media.
-  );
-  submission.screen = undefined;
-}
-
-async function beginRecording(mode: RecordingMode) {
+function beginRecording(mode: RecordingMode) {
   if (!(mode === "screen" ? canRecordScreen.value : canRecordAudio.value)) return;
-  const submission: RecordingSubmission = {
+  // Acquire media in the initiating key/click handler, before draft I/O.
+  // The panel owns the stream and presents acquisition failures.
+  const microphone =
+    mode === "microphone"
+      ? navigator.mediaDevices.getUserMedia({ audio: true })
+      : undefined;
+  const screen =
+    mode === "screen"
+      ? navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      : undefined;
+  void microphone?.catch(() => {});
+  void screen?.catch(() => {});
+  // The recorder starts while the destination is still being created.
+  const preparation = props.onStartRecording(message.value);
+  const submission = shallowReactive<RecordingSubmission>({
     mode,
+    microphone,
+    screen,
+    preparation,
+    destination: preparation.resolve(),
+    origin: props.conversationId ?? null,
     message: message.value,
     context: composeMessageWithAttachments(message.value),
     attachmentIDs: readyAttachments.value.map(({ id }) => id),
     attachmentSession: activeAttachmentSession,
-  };
+  });
   recordingSubmission.value = submission;
-  try {
-    if (mode === "screen") {
-      // Keep the picker in the initiating key/click handler, before draft I/O.
-      submission.screen = navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      // The panel presents picker failures after the destination is ready.
-      void submission.screen.catch(() => {});
-    }
-    const destination = await props.onStartRecording(submission.message);
-    if (recordingSubmission.value !== submission) {
-      releasePendingScreen(submission);
-      return;
-    }
-    // A new draft may have finished creating after navigation away from /new.
-    if (attachmentSessions.get(null) === submission.attachmentSession) {
-      attachmentSessions.delete(null);
-    }
-    attachmentSessions.set(destination.conversationId, submission.attachmentSession);
-    recordingSubmission.value = { ...submission, destination };
-  } catch {
-    // The parent surfaces destination-creation errors. Release any selected screen.
-    releasePendingScreen(submission);
-    if (recordingSubmission.value === submission) recordingSubmission.value = null;
-    if (![...attachmentSessions.values()].includes(submission.attachmentSession)) {
-      clearAttachments(submission.attachmentSession);
-    }
+  watchRecordingDestination(submission);
+}
+
+function watchRecordingDestination(submission: RecordingSubmission) {
+  const destination = submission.destination;
+  destination.then(
+    (resolved) => {
+      if (recordingSubmission.value !== submission) return;
+      adoptAttachmentSession(submission, resolved.conversationId);
+      submission.conversationId = resolved.conversationId;
+    },
+    (error) => {
+      if (recordingSubmission.value !== submission) return;
+      submission.destinationError = error instanceof Error ? error.message : String(error);
+    },
+  );
+}
+
+// A new draft may have finished creating after navigation away from /new.
+function adoptAttachmentSession(submission: RecordingSubmission, conversationId: string) {
+  if (attachmentSessions.get(null) === submission.attachmentSession) {
+    attachmentSessions.delete(null);
+  }
+  if (!attachmentSessions.has(conversationId)) {
+    attachmentSessions.set(conversationId, submission.attachmentSession);
   }
 }
 
-function handleRecordingComplete(path: string) {
+function returnToRecording() {
   const submission = recordingSubmission.value;
-  if (!submission?.destination) throw new Error("recording completed without a destination");
-  // On failure retain the source draft and attachments. The parent surfaces
-  // the uploaded media path and original destination for recovery.
-  const destination = submission.destination;
-  void destination.complete(path, submission.context)
-    .then(() => {
-      if (props.conversationId === destination.conversationId && message.value === submission.message) {
-        setMessage("");
-      }
-      for (const id of submission.attachmentIDs) {
-        removeAttachment(id, submission.attachmentSession);
-      }
-    })
-    .catch(() => {});
+  // A recorder cancelled while Return is in flight must not navigate later.
+  const stillWanted = () => recordingSubmission.value === submission;
+  void submission?.destination.then(
+    (resolved) => {
+      if (stillWanted()) return resolved.returnTo(stillWanted);
+    },
+    () => {},
+  );
+}
+
+function completionFor(submission: RecordingSubmission) {
+  return (path: string, retry: boolean) => handleRecordingComplete(submission, path, retry);
+}
+
+async function handleRecordingComplete(submission: RecordingSubmission, path: string, retry: boolean) {
+  if (retry && submission.destinationError) {
+    submission.destinationError = undefined;
+    submission.destination = submission.preparation.resolve();
+    watchRecordingDestination(submission);
+  }
+  let destination: RecordingDestination;
+  try {
+    destination = await submission.destination;
+  } catch (error) {
+    if (recordingSubmission.value === submission) reportUnsentRecording(path, error);
+    throw error;
+  }
+  if (recordingSubmission.value !== submission) {
+    throw new DOMException("Recording cancelled", "AbortError");
+  }
+  submission.submitting = true;
+  try {
+    await destination.complete(path, submission.context);
+  } finally {
+    submission.submitting = false;
+  }
+  if (disposed) return;
+  if (props.conversationId === destination.conversationId && message.value === submission.message) {
+    setMessage("");
+  }
+  for (const id of submission.attachmentIDs) {
+    removeAttachment(id, submission.attachmentSession);
+  }
+}
+
+function reportUnsentRecording(path: string, error: unknown) {
+  emit("recording-unsent", path, error);
 }
 
 async function closeRecording() {
   const wasInline = !recordingFloating.value;
-  if (recordingSubmission.value) releasePendingScreen(recordingSubmission.value);
+  const submission = recordingSubmission.value;
+  submission?.preparation.release();
+  if (submission && ![...attachmentSessions.values()].includes(submission.attachmentSession)) {
+    clearAttachments(submission.attachmentSession);
+  }
   recordingSubmission.value = null;
   await nextTick();
   if (wasInline) textareaRef.value?.focus();
@@ -892,6 +1014,11 @@ watch(
       attachmentSessions.delete(oldId ?? null);
       attachmentSessions.set(key, activeAttachmentSession);
       return;
+    }
+
+    const recording = recordingSubmission.value;
+    if (recording && !recording.conversationId && !recording.detached) {
+      recording.detached = true;
     }
 
     if (oldId == null && newId != null) {
@@ -1011,6 +1138,85 @@ const preferCompactAndSend = computed(
 // --- @ filename autocomplete --------------------------------------------
 const fileMenuId = useId();
 const fileMenuRef = ref<HTMLDivElement | null>(null);
+// useFileCompletion keys its results on the session and reacts synchronously,
+// so it must not observe the session mid-update. conversationId and
+// lazyDraftId are separate props that Vue patches one at a time: promoting a
+// new conversation to a draft goes (null, null) -> (id, null) -> (id, id), and
+// the middle state's session is the id. Fed composerSession() directly, the
+// completion would reset its highlight and re-fetch on every draft creation —
+// i.e. under the user's arrow keys, ~600ms after typing pauses. A batched watcher only
+// sees the settled value, which is unchanged (null) for that transition.
+const completionSession = ref(composerSession());
+watch(composerSession, (session) => {
+  completionSession.value = session;
+});
+const skillMenuId = useId();
+const skillMenuRef = ref<HTMLDivElement | null>(null);
+const {
+  active: activeSkillCommand,
+  visible: showSkillMenu,
+  matches: skillMatches,
+  selected: skillSelected,
+  loading: skillLoading,
+  error: skillError,
+  focused: skillFocused,
+  updateSelection: updateSkillSelection,
+  dismiss: dismissSkills,
+  reopen: reopenSkills,
+  choose: completeSkill,
+} = useSkillCompletion({
+  message,
+  cwd: () => props.cwd ?? "",
+  session: () => completionSession.value,
+  conversationId: () => props.conversationId ?? null,
+  enabled: () => !isDisabled.value && !isShellMode.value,
+});
+
+async function chooseSkill(index: number) {
+  const replacement = completeSkill(index);
+  if (!replacement) return;
+  setMessage(replacement.text);
+  await nextTick();
+  textareaRef.value?.focus();
+  textareaRef.value?.setSelectionRange(replacement.cursor, replacement.cursor);
+  syncFileSelection();
+}
+
+// All send paths (including buttons, queue, and compact) consume the picker
+// instead of dispatching its command or executing activation instructions.
+function interceptSkillSubmission() {
+  if (!activeSkillCommand.value) {
+    // A restored draft or selected text may put the caret outside the token.
+    // A standalone /skills command still opens the picker, never dispatches.
+    if (isDisabled.value || !/^\/skills(?:[ \t]+[^\r\n]*)?$/.test(message.value.trim())) return false;
+    const cursor = message.value.trimEnd().length;
+    textareaRef.value?.setSelectionRange(cursor, cursor);
+    updateSkillSelection(cursor, cursor);
+    reopenSkills();
+    textareaRef.value?.focus();
+    return true;
+  }
+  if (showSkillMenu.value) void chooseSkill(skillSelected.value);
+  else {
+    reopenSkills();
+    textareaRef.value?.focus();
+  }
+  return true;
+}
+
+function onSkillMenuOutside(e: MouseEvent) {
+  if (skillMenuRef.value?.contains(e.target as Node) || e.target === textareaRef.value) return;
+  dismissSkills();
+}
+watch(showSkillMenu, (open) => {
+  if (open) document.addEventListener("mousedown", onSkillMenuOutside);
+  else document.removeEventListener("mousedown", onSkillMenuOutside);
+});
+watch(skillSelected, async () => {
+  await nextTick();
+  skillMenuRef.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+});
+
 const {
   visible: showFileMenu,
   matches: fileMatches,
@@ -1025,13 +1231,16 @@ const {
 } = useFileCompletion({
   message,
   cwd: () => props.cwd ?? "",
-  session: composerSession,
-  enabled: () => !isDisabled.value && !isShellMode.value,
+  session: () => completionSession.value,
+  enabled: () => !isDisabled.value && !isShellMode.value && !showSkillMenu.value,
 });
 
 function syncFileSelection() {
   const textarea = textareaRef.value;
-  if (textarea) updateFileSelection(textarea.selectionStart, textarea.selectionEnd);
+  if (textarea) {
+    updateFileSelection(textarea.selectionStart, textarea.selectionEnd);
+    updateSkillSelection(textarea.selectionStart, textarea.selectionEnd);
+  }
 }
 
 async function chooseFile(index: number) {
@@ -1151,6 +1360,7 @@ const modelArgSuggestions = computed<ModelArgOption[]>(() => {
 const showModelArgMenu = computed(
   () =>
     modelArgContext.value !== null &&
+    !showSkillMenu.value &&
     !slashMenuDismissed.value &&
     modelArgSuggestions.value.length > 0 &&
     !isDisabled.value,
@@ -1201,6 +1411,15 @@ watch(message, (value) => {
 async function chooseSlashCommand(index: number) {
   const item = slashSuggestions.value[index];
   if (!item) return;
+  if (item.command === SLASH_COMMANDS.SKILLS.command) {
+    setMessage(`${item.command} `);
+    await nextTick();
+    textareaRef.value?.focus();
+    textareaRef.value?.setSelectionRange(message.value.length, message.value.length);
+    syncFileSelection();
+    reopenSkills();
+    return;
+  }
   if (!item.takesArgs) {
     const origin = composerOrigin();
     setMessage("");
@@ -1251,6 +1470,7 @@ watch([composerSession, () => props.compactSendLevel], () => {
 
 async function handleSubmit(e: Event) {
   e.preventDefault();
+  if (interceptSkillSubmission()) return;
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     if (preferCompactAndSend.value) {
       await handleCompactAndSend();
@@ -1298,6 +1518,7 @@ async function handleSubmit(e: Event) {
 }
 
 async function handleQueueMessage() {
+  if (interceptSkillSubmission()) return;
   const dispatch = composerDispatch(message.value, { intent: "queue" });
   if (dispatch.route === "btw") {
     await handleSendNow();
@@ -1326,6 +1547,7 @@ async function handleSelectSend() {
 /** Compact the conversation, then queue the composed message so it runs once
  * compaction completes. Kicks off compaction and queues in one gesture. */
 async function handleCompactAndSend() {
+  if (interceptSkillSubmission()) return;
   const dispatch = composerDispatch(message.value, { intent: "compact-and-send" });
   if (dispatch.route === "btw") {
     await handleSendNow();
@@ -1351,6 +1573,7 @@ async function handleCompactAndSend() {
 
 /** Send now (bypass auto-queue) — used from the dropdown during distill mode */
 async function handleSendNow() {
+  if (interceptSkillSubmission()) return;
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     const dispatch = composerDispatch(message.value, { intent: "send-now" });
     const composed = composeMessageWithAttachments(message.value);
@@ -1379,6 +1602,7 @@ function onTextareaInput(e: Event) {
 
 function onTextareaFocus() {
   fileFocused.value = true;
+  skillFocused.value = true;
   syncFileSelection();
   // Scroll to bottom after keyboard animation settles
   requestAnimationFrame(() => requestAnimationFrame(() => emit("focus")));
@@ -1387,6 +1611,30 @@ function onTextareaFocus() {
 function handleKeyDown(e: KeyboardEvent) {
   // Don't submit while IME is composing.
   if (isImeComposing(e)) return;
+  syncFileSelection();
+  if (showSkillMenu.value) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissSkills();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (skillMatches.value.length) {
+        skillSelected.value =
+          (skillSelected.value + (e.key === "ArrowDown" ? 1 : -1) + skillMatches.value.length) %
+          skillMatches.value.length;
+      }
+      return;
+    }
+    if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) {
+      // Loading, empty, and error states must never fall through to sending.
+      e.preventDefault();
+      void chooseSkill(skillSelected.value);
+      return;
+    }
+  }
   if (showFileMenu.value) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -1499,10 +1747,7 @@ watch(
   () => [props.autoFocus, props.disabled] as const,
   ([af, dis]) => {
     if (af && !dis && textareaRef.value) {
-      setTimeout(() => {
-        if (document.activeElement?.closest('[aria-modal="true"]')) return;
-        textareaRef.value?.focus();
-      }, 0);
+      focusMessageInputIfUnfocused();
     }
   },
   { immediate: true },
@@ -1525,7 +1770,10 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (recordingSubmission.value) releasePendingScreen(recordingSubmission.value);
+  disposed = true;
+  const sessions = new Set(attachmentSessions.values());
+  if (recordingSubmission.value) sessions.add(recordingSubmission.value.attachmentSession);
+  recordingSubmission.value?.preparation.release();
   recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
   if (typeof window !== "undefined" && window.visualViewport) {
@@ -1534,6 +1782,7 @@ onUnmounted(() => {
   document.removeEventListener("mousedown", onQueueMenuOutside);
   document.removeEventListener("mousedown", onSlashMenuOutside);
   document.removeEventListener("mousedown", onFileMenuOutside);
-  for (const session of new Set(attachmentSessions.values())) clearAttachments(session);
+  document.removeEventListener("mousedown", onSkillMenuOutside);
+  for (const session of sessions) clearAttachments(session);
 });
 </script>
