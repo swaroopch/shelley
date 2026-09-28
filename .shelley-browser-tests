@@ -1,4 +1,5 @@
-# Browser regressions for the landed contributions (paths relative to ui/).
-e2e/file-completion.spec.ts
+# Browser regressions (paths relative to ui/). Upstream moved file-completion
+# coverage to unit tests and opt-in LazyCue; do not reference its deleted spec.
+e2e/skills-picker.spec.ts
 e2e/mobile-keyboard-input.spec.ts
 e2e/message-input-alignment.spec.ts

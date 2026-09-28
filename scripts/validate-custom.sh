@@ -22,6 +22,12 @@ make ui
   pnpm test
 )
 make build-custom
+# Go's chromedp tests need a browser on PATH too. Reuse the exact Chromium
+# installed for Playwright rather than requiring a separate system package.
+(cd ui && pnpm exec playwright install chromium)
+chromium_path=$(cd ui && pnpm exec node -e 'process.stdout.write(require("@playwright/test").chromium.executablePath())')
+[[ -x "$chromium_path" ]] || { echo "Chromium is not executable: $chromium_path" >&2; exit 1; }
+export PATH="$(dirname "$chromium_path"):$PATH"
 go test -parallel 1 ./...
 browser_specs=()
 while IFS= read -r spec || [[ -n "$spec" ]]; do
@@ -35,7 +41,6 @@ done < .shelley-browser-tests
 if (( ${#browser_specs[@]} )); then
   (
     cd ui
-    pnpm exec playwright install chromium
     pnpm exec playwright test "${browser_specs[@]}"
   )
 fi

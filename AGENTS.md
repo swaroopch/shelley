@@ -86,7 +86,9 @@
   branches. Never squash shared `custom`; do not rewrite a PR while its maintainer
   is already cleaning it up. Keep PR-only explanations in the PR description.
 
-- Upstream-only application policy (September 22, 2026): both contributions have
-  landed. Keep `.shelley-features` empty; do not restore retired fork application
-  patches or their old absolute-path completion convention. Retain provisioning,
-  operational records, and tested merge-based upstream synchronization only.
+- The 2026-09-27 owner-approved exception to the upstream-only application
+  baseline enables `skills-picker` in `.shelley-features`, pending an upstream PR.
+  Keep its upstream-facing branch independent of `custom`; see
+  `SKILLS_PICKER_PR.md` and the current policy in `CUSTOMIZATIONS.md`.
+  Do not restore retired fork application patches or their old absolute-path
+  completion convention. Retain tested merge-based upstream synchronization.

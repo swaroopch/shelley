@@ -1,6 +1,46 @@
 # This fork's customization workflow
 
-## Current policy: upstream application, preserved operations (September 22, 2026)
+## Current policy: skills picker pending upstream (2026-09-27)
+
+The owner explicitly approved implementing `/skills`, integrating it into `custom`,
+and preparing it for an upstream PR. This supersedes the empty-feature-manifest
+requirement of the 2026-09-22 baseline below, not its append-only history or
+separate deployment requirements. `skills-picker` is the only enabled feature.
+
+- Develop the feature on official `origin/main` in its own worktree. Its branch
+  contains only the catalog API, composer picker, and tests; never merge `custom`
+  or these operational records into the PR branch.
+- The picker inserts editable activation instructions, not full skill bodies,
+  and does not send a message or execute commands on selection. Existing
+  conversations use their current, post-hook system-prompt skill snapshot;
+  unsent drafts use discovery for the selected cwd without running prompt hooks.
+- The PR description and independent recreation prompt are in
+  `SKILLS_PICKER_PR.md`. Prepare a focused conventional feature commit on
+  `fork/skills-picker` targeting `boldsoftware/shelley:main`. Publishing a branch
+  or this record does not itself open a PR, accept a CLA, or deploy a binary.
+- `.shelley-features` enables subsequent feature merges by the existing timer.
+  `.shelley-browser-tests` includes the skill-picker regressions. When upstream
+  lands the intent, review the resulting source and remove the manifest entry
+  deliberately; removing it alone never undoes already-merged code.
+- The validation gate exposes Playwright's pinned Chromium on PATH before Go
+  tests: upstream chromedp screencast tests now require it, and this VM has no
+  system Chromium. Resolve the executable from Playwright rather than a
+  machine-specific cache path, and fail if it is unavailable. This reuses the
+  browser already needed by the gate; it does not install an OS package.
+- Upstream removed `e2e/file-completion.spec.ts` in `bcc135f`, replacing it with
+  opt-in LazyCue tests. Remove the stale manifest path, retaining normal UI unit
+  coverage. The gate does not enable LLM-backed LazyCue healing implicitly.
+
+Validate in a separate integration clone; pause the sync timer before manual
+publication, inspect commit identities/messages, atomically push the feature and
+append-only `custom`, fast-forward the canonical checkout, then restore the
+previous timer state. If publication fails, keep the tested candidate and inspect
+remote movement; never force-push `custom`. If a future merge fails, the timer
+keeps the last validated remote source and never installs it. Recovery otherwise
+uses the procedures below. No main-service installation or restart is authorized
+by this feature request.
+
+## Previous baseline: upstream application, preserved operations (2026-09-22)
 
 The owner approved replacing all fork application differences with upstream,
 while retaining append-only `custom` history and first-boot provisioning.

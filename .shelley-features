@@ -1,2 +1,2 @@
-# No fork application features: both contributions have landed upstream.
-# Application source follows upstream; retain only fork maintenance/provisioning.
+# Upstream-facing features explicitly enabled by the owner.
+skills-picker
