@@ -13,6 +13,7 @@ export CI=true
 uv run --no-project scripts/test-sync-custom.py
 uv run --no-project scripts/test-provision-exe-vm.py
 uv run --no-project scripts/test-configure-exe-defaults.py
+uv run --no-project scripts/test-run-go-tests.py
 make ui
 (
   cd ui
@@ -28,7 +29,7 @@ make build-custom
 chromium_path=$(cd ui && pnpm exec node -e 'process.stdout.write(require("@playwright/test").chromium.executablePath())')
 [[ -x "$chromium_path" ]] || { echo "Chromium is not executable: $chromium_path" >&2; exit 1; }
 export PATH="$(dirname "$chromium_path"):$PATH"
-go test -parallel 1 ./...
+uv run --no-project scripts/run-go-tests.py
 browser_specs=()
 while IFS= read -r spec || [[ -n "$spec" ]]; do
   [[ -z "$spec" || "$spec" == \#* ]] && continue

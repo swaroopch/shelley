@@ -646,3 +646,14 @@ Run `uv run --no-project scripts/test-sync-custom.py` for isolated Git fixtures
 its only argument is the separate candidate checkout. Serial Go execution is
 intentional: the upstream reflection-cache test has failed under the default
 parallel suite on this VM.
+
+As of 2026-09-28, the gate runs Go tests through `scripts/run-go-tests.py` with a
+temporary, empty `HOME`, retaining the original Go dependency/build caches and
+browser PATH. The upstream SSE test reads one fixed-size buffer; inherited
+owner guidance and skills enlarged its system prompt beyond that buffer and
+failed even on the previous application baseline. An isolated home passed
+three consecutive focused runs without changing upstream code. This also keeps
+personal guidance out of test fixtures and logs. The helper cleans up on success
+or failure and propagates Go's exit status; offline regression tests cover these
+properties. Recovery requires these tracked scripts, not VM-specific settings.
+Do not skip failing tests or truncate the owner's actual guidance.
