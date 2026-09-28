@@ -38,9 +38,18 @@ Feature branch:
   draft promotion and effective-catalog snapshot behavior.
 - Independent source review: both reported issues fixed and regression-tested.
 
-The separate `custom` integration must additionally pass
-`scripts/validate-custom.sh`, covering fork maintenance tests, the complete suites,
-and its combined browser manifest before publication.
+The separate `custom` integration passed `scripts/validate-custom.sh`: 32 fork
+maintenance tests, all 73 UI test files, both type checks, lint, a customized
+build, the serial Go suite, and all 14 combined browser checks. Application source
+in that integration matches the feature branch exactly.
+
+## Screenshot
+
+Mobile composer with synthetic skills from the deterministic browser fixture;
+the crop contains no personal conversation or filesystem data. The image is kept
+on `custom`, not in the upstream feature diff.
+
+![Skills picker](https://raw.githubusercontent.com/swaroopch/shelley/custom/docs/pr-assets/skills-picker.png)
 
 ## Upstream submission
 

@@ -40,6 +40,16 @@ keeps the last validated remote source and never installs it. Recovery otherwise
 uses the procedures below. No main-service installation or restart is authorized
 by this feature request.
 
+Validation record: feature `921438127158bdff51bb7a6a93d288c8cdad7582`, based on
+upstream `5a6af0f`, merged without application-source differences in integration
+`aa15dc455dd91d45070ebc5ef13ef69fad85c750`. The full gate passed: 32 maintenance
+tests, 73 UI unit-test files, both type checks, lint, customized build, all serial
+Go tests, and 14 browser checks. The feature's catalog tests also passed under
+`-race`. The screenshot in `docs/pr-assets/skills-picker.png` is a crop of the
+synthetic browser fixture, reviewed to exclude VM identity and private content.
+The final record/assets commit changes no application code. Publication and a
+canonical checkout fast-forward do not replace the already-running binary.
+
 ## Previous baseline: upstream application, preserved operations (2026-09-22)
 
 The owner approved replacing all fork application differences with upstream,
