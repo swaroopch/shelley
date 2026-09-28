@@ -50,6 +50,22 @@ synthetic browser fixture, reviewed to exclude VM identity and private content.
 The final record/assets commit changes no application code. Publication and a
 canonical checkout fast-forward do not replace the already-running binary.
 
+Upstream submission was authorized on 2026-09-27 after the owner tested the
+deployed feature. The feature branch still contains exactly one commit and no
+fork-only files. `SKILLS_PICKER_PR.md` now contains the concise submission body,
+not the operational checklist. Creating the PR with the documented
+`GH_HOST=github.int.exe.xyz gh pr create` command returned HTTP 403; a follow-up
+listing found no PR for `skills-picker`. Do not mark it submitted or work around
+the permission denial. Once authorized PR-write access is available, check for
+an existing PR before retrying:
+
+```sh
+GH_HOST=github.int.exe.xyz gh pr create -R boldsoftware/shelley \
+  --base main --head swaroopch:skills-picker \
+  --title 'feat(ui): add a /skills picker to the prompt composer' \
+  --body-file SKILLS_PICKER_PR.md
+```
+
 ## Previous baseline: upstream application, preserved operations (2026-09-22)
 
 The owner approved replacing all fork application differences with upstream,
