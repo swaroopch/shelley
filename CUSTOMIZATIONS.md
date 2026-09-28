@@ -15,9 +15,11 @@ separate deployment requirements. `skills-picker` is the only enabled feature.
   conversations use their current, post-hook system-prompt skill snapshot;
   unsent drafts use discovery for the selected cwd without running prompt hooks.
 - The PR description and independent recreation prompt are in
-  `SKILLS_PICKER_PR.md`. Prepare a focused conventional feature commit on
-  `fork/skills-picker` targeting `boldsoftware/shelley:main`. Publishing a branch
-  or this record does not itself open a PR, accept a CLA, or deploy a binary.
+  `SKILLS_PICKER_PR.md`. The owner opened
+  [upstream PR #303](https://github.com/boldsoftware/shelley/pull/303) from
+  `fork/skills-picker` targeting `boldsoftware/shelley:main`. Keep its single
+  feature commit separate from fork records; PR creation does not accept a CLA
+  or authorize deployment.
 - `.shelley-features` enables subsequent feature merges by the existing timer.
   `.shelley-browser-tests` includes the skill-picker regressions. When upstream
   lands the intent, review the resulting source and remove the manifest entry
@@ -54,17 +56,13 @@ Upstream submission was authorized on 2026-09-27 after the owner tested the
 deployed feature. The feature branch still contains exactly one commit and no
 fork-only files. `SKILLS_PICKER_PR.md` now contains the concise submission body,
 not the operational checklist. Creating the PR with the documented
-`GH_HOST=github.int.exe.xyz gh pr create` command returned HTTP 403; a follow-up
-listing found no PR for `skills-picker`. Do not mark it submitted or work around
-the permission denial. Once authorized PR-write access is available, check for
-an existing PR before retrying:
-
-```sh
-GH_HOST=github.int.exe.xyz gh pr create -R boldsoftware/shelley \
-  --base main --head swaroopch:skills-picker \
-  --title 'feat(ui): add a /skills picker to the prompt composer' \
-  --body-file SKILLS_PICKER_PR.md
-```
+`GH_HOST=github.int.exe.xyz gh pr create` command returned HTTP 403. The owner
+then created [PR #303](https://github.com/boldsoftware/shelley/pull/303) through
+GitHub's web UI. Verified on 2026-09-27: open, base `main`, head
+`swaroopch:skills-picker`, one commit, and the required recreation section,
+exact introductory sentence, and fenced `text` prompt in the published body.
+Do not retry creation or work around the API write-permission denial. Subsequent
+updates belong on this PR; preserve `custom` history during any feature revisions.
 
 ## Previous baseline: upstream application, preserved operations (2026-09-22)
 
