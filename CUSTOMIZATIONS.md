@@ -306,6 +306,17 @@ this merge nor the PR rebase installs a binary or updates the canonical checkout
 
 ## Upstream review packaging
 
+Upstream repositories usually prefer:
+
+- **Clean feature branches:** include only the relevant implementation, tests,
+  and upstream-facing documentation. Keep fork-only custom files, operational
+  notes, and PR-preparation records on `custom`, not in the upstream diff.
+- **One focused commit:** squash development and review iterations into a single
+  feature commit before submission, unless the maintainer requests otherwise.
+- **A simple PR description:** briefly explain the change, why it is needed, and
+  how it was tested. Retain required recreation prompts and applicable screenshots,
+  but leave detailed implementation diaries and fork operations out.
+
 For future upstream PRs, prefer a single focused commit rebased onto the target
 branch, with the owner identity and a Conventional Commit subject. Fold review
 fixes into that commit when appropriate and publish with an explicit feature-tip

@@ -81,6 +81,10 @@
 - The one-time screenshot-history redaction in `HISTORY_REDACTION.md` is
   completed and its exception is closed. Keep private backups private; never
   merge stale, pre-redaction `custom` history back into the published branch.
+- Upstream repositories usually prefer clean feature branches (no fork-only
+  custom files or notes), one focused commit, and a short, simple PR description.
+  Keep operational records on `custom`; retain required validation and recreation
+  prompts without adding an implementation diary. See `CUSTOMIZATIONS.md`.
 - Prefer one focused rebased/squashed commit per upstream PR. Fold review fixes
   into that feature commit when appropriate, using explicit leases for published
   branches. Never squash shared `custom`; do not rewrite a PR while its maintainer
