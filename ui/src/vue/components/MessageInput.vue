@@ -677,6 +677,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: "focus"): void;
+  (e: "open-terminal"): void;
   (e: "clear-injected-text"): void;
   (e: "draft-change", value: string): void;
   (e: "draft-send-started"): void;
@@ -1472,6 +1473,8 @@ async function handleSubmit(e: Event) {
   e.preventDefault();
   if (interceptSkillSubmission()) return;
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
+    if (openTerminalIfRequested(composerDispatch(message.value))) return;
+
     if (preferCompactAndSend.value) {
       await handleCompactAndSend();
       return;
@@ -1520,6 +1523,7 @@ async function handleSubmit(e: Event) {
 async function handleQueueMessage() {
   if (interceptSkillSubmission()) return;
   const dispatch = composerDispatch(message.value, { intent: "queue" });
+  if (openTerminalIfRequested(dispatch)) return;
   if (dispatch.route === "btw") {
     await handleSendNow();
     return;
@@ -1549,6 +1553,7 @@ async function handleSelectSend() {
 async function handleCompactAndSend() {
   if (interceptSkillSubmission()) return;
   const dispatch = composerDispatch(message.value, { intent: "compact-and-send" });
+  if (openTerminalIfRequested(dispatch)) return;
   if (dispatch.route === "btw") {
     await handleSendNow();
     return;
@@ -1576,6 +1581,7 @@ async function handleSendNow() {
   if (interceptSkillSubmission()) return;
   if (hasContent.value && !props.disabled && !submitting.value && uploadsInProgress.value === 0) {
     const dispatch = composerDispatch(message.value, { intent: "send-now" });
+    if (openTerminalIfRequested(dispatch)) return;
     const composed = composeMessageWithAttachments(message.value);
     const messageToSend = dispatch.route === "btw" ? composed : composed.trim();
     setMessage("");
@@ -1593,6 +1599,15 @@ async function handleSendNow() {
       if (submission === submissionGeneration) submitting.value = false;
     }
   }
+}
+
+function openTerminalIfRequested(dispatch: ReturnType<typeof composerDispatch>): boolean {
+  if (dispatch.route !== "terminal") return false;
+  setMessage("");
+  emit("draft-cleared");
+  showQueueMenu.value = false;
+  emit("open-terminal");
+  return true;
 }
 
 function onTextareaInput(e: Event) {
