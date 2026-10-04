@@ -14,7 +14,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,10 +59,6 @@ func marshalDeltaBatchFrames(conversationID string, deltas []llm.StreamDelta) ([
 
 // handleRead serves files from limited allowed locations via /api/read?path=
 func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
@@ -140,10 +135,6 @@ func isDistillationTempFile(path string) bool {
 // editor shows freshly-saved content rather than whatever was on disk when the
 // page was first loaded.
 func (s *Server) handleUserAgentsMd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	path, err := userAgentsMdPath()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -162,11 +153,6 @@ func (s *Server) handleUserAgentsMd(w http.ResponseWriter, r *http.Request) {
 
 // handleWriteFile writes content to a file (for diff viewer edit mode)
 func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -191,7 +177,7 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Write the file
 	if err := os.WriteFile(clean, []byte(req.Content), 0o644); err != nil {
-		http.Error(w, fmt.Sprintf("failed to write file: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to write file: %v", err), s.errorStatus(err))
 		return
 	}
 
@@ -219,10 +205,6 @@ const maxEditableFileBytes = 16 << 20 // 16 MiB
 // file the fuzzy finder surfaces. Writing already accepts arbitrary absolute
 // paths via /api/write-file, so reading them is consistent.
 func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	p := r.URL.Query().Get("path")
 	if p == "" {
 		http.Error(w, "path required", http.StatusBadRequest)
@@ -265,11 +247,6 @@ type uploadErrorResponse struct {
 // handleUpload handles file uploads via POST /api/upload.
 // Files are saved to the UploadDir with a random filename.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -295,7 +272,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		path, err := saveUploadFile(part.FileName(), part)
 		part.Close()
 		if err != nil {
-			writeUploadSaveError(w, err)
+			s.writeUploadSaveError(w, err)
 			return
 		}
 		writeUploadResponse(w, path)
@@ -323,7 +300,7 @@ func (s *Server) handleUploadRaw(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	path, err := saveUploadFile(filename, r.Body)
 	if err != nil {
-		writeUploadSaveError(w, err)
+		s.writeUploadSaveError(w, err)
 		return
 	}
 	writeUploadResponse(w, path)
@@ -352,13 +329,13 @@ func writeUploadParseError(w http.ResponseWriter, prefix string, err error) {
 	writeUploadError(w, http.StatusBadRequest, "invalid_multipart", prefix+err.Error())
 }
 
-func writeUploadSaveError(w http.ResponseWriter, err error) {
+func (s *Server) writeUploadSaveError(w http.ResponseWriter, err error) {
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {
 		writeUploadError(w, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body too large")
 		return
 	}
-	writeUploadError(w, http.StatusInternalServerError, "upload_save_failed", "failed to save file: "+err.Error())
+	writeUploadError(w, s.errorStatus(err), "upload_save_failed", "failed to save file: "+err.Error())
 }
 
 // saveUploadFile writes src into browse.UploadDir under a sanitized name
@@ -527,9 +504,9 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 			return
 		}
 
-		// For JS, CSS, and source-map files, serve from .gz files (only the .gz
-		// versions are embedded to keep the binary small).
-		if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".map") {
+		// For JS, CSS, source-map and font files, serve from .gz files (only the
+		// .gz versions are embedded to keep the binary small).
+		if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".map") || strings.HasSuffix(r.URL.Path, ".woff2") {
 			gzPath := r.URL.Path + ".gz"
 			gzFile, err := fsys.Open(gzPath)
 			if err != nil {
@@ -561,9 +538,12 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 			}
 
 			contentType := mime.TypeByExtension(filepath.Ext(r.URL.Path))
-			if contentType == "" && strings.HasSuffix(r.URL.Path, ".map") {
-				// Source maps are JSON; mime has no registered type for .map.
+			// Go's builtin mime table has neither; don't depend on the host's.
+			switch filepath.Ext(r.URL.Path) {
+			case ".map":
 				contentType = "application/json; charset=utf-8"
+			case ".woff2":
+				contentType = "font/woff2"
 			}
 			w.Header().Set("Content-Type", contentType)
 			w.Header().Set("Vary", "Accept-Encoding")
@@ -590,14 +570,6 @@ func (s *Server) staticHandler(fsys http.FileSystem) http.Handler {
 
 		fileServer.ServeHTTP(w, r)
 	})
-}
-
-const defaultFaviconEmoji = "🐚"
-
-func generateEmojiFaviconSVG(emoji string) string {
-	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
-<text x="200" y="200" text-anchor="middle" dominant-baseline="central" font-size="320" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif">%s</text>
-</svg>`, html.EscapeString(emoji))
 }
 
 // serveIndexWithInit serves index.html with injected initialization data
@@ -704,15 +676,12 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 		return
 	}
 
-	// Use the VM's reflection emoji, or Shelley's universal emoji when
-	// reflection metadata is unavailable (for example, standalone installs).
-	emoji := s.reflectionEmoji(r.Context())
-	if emoji == "" {
-		emoji = defaultFaviconEmoji
+	fe, err := s.currentFaviconEmoji(r.Context())
+	if err != nil {
+		s.internalError(w, "Failed to get favicon emoji", err)
+		return
 	}
-	faviconSVG := generateEmojiFaviconSVG(emoji)
-	faviconDataURI := "data:image/svg+xml," + url.PathEscape(faviconSVG)
-	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, html.EscapeString(faviconDataURI))
+	faviconLink := fmt.Sprintf(`<link rel="icon" type="image/svg+xml" href="%s"/>`, html.EscapeString(faviconHref(fe.Emoji)))
 
 	// Inject the script tag and favicon before </head>
 	initScript := fmt.Sprintf(`<script>window.__SHELLEY_INIT__=%s;</script>`, initJSON)
@@ -725,10 +694,6 @@ func (s *Server) serveIndexWithInit(w http.ResponseWriter, r *http.Request, fs h
 // handleConfig returns server configuration
 // handleConversations handles GET /conversations
 func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	limit := 5000
 	offset := 0
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
@@ -744,8 +709,7 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 
 	conversations, err := s.conversationListWithState(r.Context(), limit, offset, r.URL.Query().Get("q"), r.URL.Query().Get("search_content") == "true")
 	if err != nil {
-		s.logger.Error("Failed to get conversations", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversations", err)
 		return
 	}
 
@@ -773,8 +737,7 @@ type ConversationListSnapshot struct {
 func (s *Server) handleConversationsSnapshot(w http.ResponseWriter, r *http.Request) {
 	list, hash, err := s.conversationListStream.snapshot(r.Context())
 	if err != nil {
-		s.logger.Error("Failed to compute conversation list snapshot", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to compute conversation list snapshot", err)
 		return
 	}
 	if list == nil {
@@ -849,18 +812,20 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 		subagentCounts = make(map[string]int64)
 	}
 
+	runningJobs := s.runningBackgroundJobCounts()
 	now := time.Now()
 	result := make([]ConversationWithState, len(conversations))
 	for i, item := range conversations {
 		conv := item.Conversation
 		cws := ConversationWithState{
-			Conversation:     conv,
-			Working:          conv.AgentWorking,
-			SubagentCount:    subagentCounts[conv.ConversationID],
-			Preview:          item.Preview,
-			PreviewUpdatedAt: item.PreviewUpdatedAt,
-			MaxSequenceID:    item.MaxSequenceID,
-			Participants:     item.Participants,
+			Conversation:          conv,
+			Working:               conv.AgentWorking,
+			SubagentCount:         subagentCounts[conv.ConversationID],
+			RunningBackgroundJobs: runningJobs[conv.ConversationID],
+			Preview:               item.Preview,
+			PreviewUpdatedAt:      item.PreviewUpdatedAt,
+			MaxSequenceID:         item.MaxSequenceID,
+			Participants:          item.Participants,
 		}
 		if conv.Cwd != nil {
 			entry, ok := s.conversationListGitCache.get(*conv.Cwd, now)
@@ -891,100 +856,99 @@ func (s *Server) decorateConversations(ctx context.Context, conversations []db.C
 	return result, nil
 }
 
-// conversationMux returns a mux for /api/conversation/<id>/* routes
-func (s *Server) conversationMux() *http.ServeMux {
-	mux := http.NewServeMux()
+// registerConversationRoutes registers the /api/conversation/<id>/* routes.
+func (s *Server) registerConversationRoutes(mux *http.ServeMux) {
 	// GET /api/conversation/<id> - returns all messages (can be large, compress)
-	mux.Handle("GET /{id}", compressionHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/conversation/{id}", compressionHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetConversation(w, r, r.PathValue("id"))
 	})))
 	// GET /api/conversation/<id>/subagent-usage - aggregated subagent cost
-	mux.HandleFunc("GET /{id}/subagent-usage", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/subagent-usage", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSubagentUsage(w, r, r.PathValue("id"))
 	})
 	// GET /api/conversation/<id>/stream - legacy SSE stream. Compression is
 	// negotiated inside the handler (zstd/gzip per Accept-Encoding) with a
 	// compressor flush after every event so messages stream promptly.
-	mux.HandleFunc("GET /{id}/stream", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		s.handleStreamConversation(w, r, r.PathValue("id"))
 	})
 	// POST endpoints - small responses, no compression needed
-	mux.HandleFunc("POST /{id}/chat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/chat", func(w http.ResponseWriter, r *http.Request) {
 		s.handleChatConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/hooks", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRegisterConversationHook(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRetryConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
 		s.handleResumeConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("GET /{id}/btw", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/btw", func(w http.ResponseWriter, r *http.Request) {
 		s.handleListBtwReaders(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/btw/{childID}/summarize", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/btw/{childID}/summarize", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSummarizeBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
 	})
-	mux.HandleFunc("POST /{id}/btw/{childID}/dismiss", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/btw/{childID}/dismiss", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDismissBtwReader(w, r, r.PathValue("id"), r.PathValue("childID"))
 	})
-	mux.HandleFunc("POST /{id}/continue", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/continue", func(w http.ResponseWriter, r *http.Request) {
 		s.handleContinueConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		s.handleArchiveConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/unarchive", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/unarchive", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUnarchiveConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/delete", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/rename", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/rename", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRenameConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/tags", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/tags", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateConversationTags(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("GET /{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/subagents", func(w http.ResponseWriter, r *http.Request) {
 		s.handleGetSubagents(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/conversation/{id}/background-jobs", func(w http.ResponseWriter, r *http.Request) {
+		s.handleListBackgroundJobs(w, r, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/conversation/{id}/background-jobs/{jobID}/kill", func(w http.ResponseWriter, r *http.Request) {
+		s.handleKillBackgroundJob(w, r, r.PathValue("id"), r.PathValue("jobID"))
+	})
+	mux.HandleFunc("POST /api/conversation/{id}/send-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSendQueuedNow(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cancel-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cancel-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCancelQueued(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/retry-queued", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/retry-queued", func(w http.ResponseWriter, r *http.Request) {
 		s.handleRetryQueued(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("PUT /{id}/draft", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/conversation/{id}/draft", func(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateDraft(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/new-generation", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/new-generation", func(w http.ResponseWriter, r *http.Request) {
 		s.handleStartNewGeneration(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/fork", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/fork", func(w http.ResponseWriter, r *http.Request) {
 		s.handleForkConversation(w, r, r.PathValue("id"))
 	})
-	mux.HandleFunc("POST /{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/conversation/{id}/cwd", func(w http.ResponseWriter, r *http.Request) {
 		s.handleSetConversationCwd(w, r, r.PathValue("id"))
 	})
-	return mux
 }
 
 // handleGetConversation handles GET /conversation/<id>
 func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	// Optional cursor: clients that already have a partial cache pass
 	// `?last_sequence_id=N` and we return only the tail (matches the
@@ -1021,8 +985,7 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to get conversation messages", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation messages", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1067,11 +1030,6 @@ type ChatRequest struct {
 
 // handleChatConversation handles POST /conversation/<id>/chat
 func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse request
@@ -1103,8 +1061,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 
 	senderUserData, err := s.senderUserData(ctx, *existing, req.SenderConversationID)
 	if err != nil {
-		s.logger.Error("Failed to resolve chat sender", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to resolve chat sender", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1151,8 +1108,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			if managerErr != nil {
-				s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", managerErr)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				s.internalError(w, "Failed to get conversation manager", managerErr, "conversationID", conversationID)
 				return
 			}
 			if s.handleModelCommand(recoveryCtx, w, conversationID, modelID, manager, req.Message) {
@@ -1304,8 +1260,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 			// first pins it — two same-instant sends on different models is a
 			// race the user has already lost either way.)
 		case err != nil:
-			s.logger.Error("Failed to promote draft", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to promote draft", err, "conversationID", conversationID)
 			return
 		case req.Model == "" && promoted.Model != nil && *promoted.Model != "" && *promoted.Model != modelID:
 			// An omitted-model send resolves to the draft's persisted model,
@@ -1328,8 +1283,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation manager", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1354,7 +1308,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		if msgs, lerr := s.db.ListMessages(ctx, conversationID); lerr == nil {
 			for i := range msgs {
 				if msgs[i].Type == string(db.MessageTypeSystem) {
-					s.notifySubscribersNewMessage(ctx, conversationID, &msgs[i])
+					s.notifySubscribers(ctx, conversationID, msgs[i])
 				}
 			}
 		} else {
@@ -1407,7 +1361,12 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// Decide whether this message will be queued or accepted immediately.
 	// The chat-message hook is told which path it will take so it can react
 	// accordingly.
-	willQueue := req.Queue || manager.IsDistilling() || manager.HasQueuedMessages()
+	hasQueued, err := manager.HasQueuedMessages(ctx)
+	if err != nil {
+		s.internalError(w, "Failed to read queued messages", err, "conversationID", conversationID)
+		return
+	}
+	willQueue := req.Queue || manager.IsDistilling() || hasQueued
 
 	// Run chat-message hook; the hook may rewrite the message text. Hook
 	// failures abort the request — the user's message is not delivered.
@@ -1445,8 +1404,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	// and stays consistent with what actually happens here.
 	if willQueue {
 		if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
-			s.logger.Error("Failed to queue user message", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to queue user message", err, "conversationID", conversationID)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -1457,8 +1415,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 	firstMessage, err := manager.AcceptUserMessage(ctx, llmService, modelID, userMessage)
 	if errors.Is(err, errQueuedMessagesPending) {
 		if err := manager.QueueMessage(ctx, s, modelID, userMessage); err != nil {
-			s.logger.Error("Failed to queue user message after concurrent queue reservation", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to queue user message after concurrent queue reservation", err, "conversationID", conversationID)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -1470,8 +1427,7 @@ func (s *Server) handleChatConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to accept user message", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to accept user message", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1498,11 +1454,6 @@ func (s *Server) runChatMessageHook(r *http.Request, conversationID, modelID, re
 
 // handleNewConversation handles POST /api/conversations/new - creates conversation implicitly on first message
 func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse request
@@ -1550,8 +1501,7 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 
 	conversation, err := s.db.CreateConversation(ctx, nil, true, cwdPtr, &modelID, convOpts)
 	if err != nil {
-		s.logger.Error("Failed to create conversation", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to create conversation", err)
 		return
 	}
 	conversationID := conversation.ConversationID
@@ -1609,12 +1559,6 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Notify conversation list subscribers about the new conversation
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
-
 	userEmail := r.Header.Get("X-ExeDev-Email")
 	// Attribute the user turn to its author; see handleChatConversation for why
 	// the recorder reads the email off ctx rather than the shared manager.
@@ -1627,8 +1571,7 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation manager", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1664,8 +1607,7 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to accept user message", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to accept user message", err, "conversationID", conversationID)
 		return
 	}
 
@@ -1683,11 +1625,6 @@ func (s *Server) handleNewConversation(w http.ResponseWriter, r *http.Request) {
 
 // handleCancelConversation handles POST /conversation/<id>/cancel
 func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	s.mu.Lock()
@@ -1760,11 +1697,6 @@ func (s *Server) handleCancelConversation(w http.ResponseWriter, r *http.Request
 // startup, without adding a synthetic user message. Upgrade restarts resume
 // automatically.
 func (s *Server) handleResumeConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	manager, err := s.getOrCreateConversationManager(ctx, conversationID, r.Header.Get("X-ExeDev-Email"))
 	if err != nil {
@@ -1805,11 +1737,6 @@ func (s *Server) handleResumeConversation(w http.ResponseWriter, r *http.Request
 // model. Requires a latest message of type "error" that is classified
 // retryable.
 func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Validate that there's actually a retryable error to act on BEFORE
@@ -1848,8 +1775,7 @@ func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request,
 		userEmail := r.Header.Get("X-ExeDev-Email")
 		manager, err = s.getOrCreateConversationManager(ctx, conversationID, userEmail)
 		if err != nil {
-			s.logger.Error("Failed to get conversation manager for retry", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to get conversation manager for retry", err, "conversationID", conversationID)
 			return
 		}
 		modelID := manager.GetModel()
@@ -1862,13 +1788,11 @@ func (s *Server) handleRetryConversation(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		if err := manager.Hydrate(ctx); err != nil {
-			s.logger.Error("Failed to hydrate for retry", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to hydrate for retry", err, "conversationID", conversationID)
 			return
 		}
 		if err := manager.ensureLoop(llmService, modelID); err != nil {
-			s.logger.Error("Failed to ensure loop for retry", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "Failed to ensure loop for retry", err, "conversationID", conversationID)
 			return
 		}
 	}
@@ -1905,11 +1829,6 @@ type continueRequest struct {
 // is left untouched (append-only log) and excluded from context, so the new
 // model sees the same request.
 func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	// Parse the optional body (empty body is fine — defaults to Opus).
@@ -1944,8 +1863,7 @@ func (s *Server) handleContinueConversation(w http.ResponseWriter, r *http.Reque
 	userEmail := r.Header.Get("X-ExeDev-Email")
 	manager, err := s.getOrCreateConversationManager(ctx, conversationID, userEmail)
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager for continue", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation manager for continue", err, "conversationID", conversationID)
 		return
 	}
 
@@ -2052,11 +1970,6 @@ func (s *Server) newStreamUpdatesQueue(ctx context.Context, conversationID strin
 }
 
 func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationID string, includeConversationListPatches bool) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx, cancelStream := context.WithCancel(r.Context())
 	responseController := http.NewResponseController(w)
 	var streamInterruptResult <-chan bool
@@ -2086,8 +1999,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 		var err error
 		listInitial, listNext, listRelease, err = s.conversationListStream.connect(ctx, query.Get("conversation_list_hash"))
 		if err != nil {
-			s.logger.Error("failed to initialize conversation list patches", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			s.internalError(w, "failed to initialize conversation list patches", err)
 			return
 		}
 		defer listRelease()
@@ -2169,8 +2081,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			// hardcoded here, so treat any error as a server bug.
 			zw, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedDefault))
 			if err != nil {
-				s.logger.Error("zstd writer init failed", "error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				s.internalError(w, "zstd writer init failed", err)
 				return false
 			}
 			compressedSink = zw
@@ -2226,12 +2137,13 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 	// must not call http.Error (which would inject uncompressed bytes into the
 	// gzip/zstd body). Simply return; the client treats the closed connection
 	// as a transient drop and reconnects via last_sequence_id.
-	errAfterStreamStart := func(w http.ResponseWriter, msg string) {
+	errAfterStreamStart := func(w http.ResponseWriter, msg string, err error, logArgs ...any) {
 		if streamStarted {
+			s.logger.Error(msg, append(logArgs, "error", err)...)
 			s.logger.Debug("abandoning compressed SSE stream after error", "msg", msg)
 			return
 		}
-		http.Error(w, msg, http.StatusInternalServerError)
+		s.internalError(w, msg, err, logArgs...)
 	}
 
 	for _, event := range listInitial {
@@ -2375,8 +2287,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			return err
 		})
 		if err != nil {
-			s.logger.Error("Failed to get conversation data", "conversationID", conversationID, "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			errAfterStreamStart(w, "Failed to get conversation data", err, "conversationID", conversationID)
 			return
 		}
 		if len(messages) > 0 {
@@ -2395,8 +2306,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			return err
 		})
 		if err != nil {
-			s.logger.Error("Failed to get conversation data", "conversationID", conversationID, "error", err)
-			errAfterStreamStart(w, "Internal server error")
+			errAfterStreamStart(w, "Failed to get conversation data", err, "conversationID", conversationID)
 			return
 		}
 		if len(messages) > 0 {
@@ -2416,8 +2326,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 			return err
 		})
 		if err != nil {
-			s.logger.Error("Failed to get conversation data", "conversationID", conversationID, "error", err)
-			errAfterStreamStart(w, "Internal server error")
+			errAfterStreamStart(w, "Failed to get conversation data", err, "conversationID", conversationID)
 			return
 		}
 		if len(messages) > 0 {
@@ -2427,8 +2336,7 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 
 	manager, err := s.getOrCreateConversationManager(ctx, conversationID, "")
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", err)
-		errAfterStreamStart(w, "Internal server error")
+		errAfterStreamStart(w, "Failed to get conversation manager", err, "conversationID", conversationID)
 		return
 	}
 
@@ -2584,11 +2492,6 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request, conversationI
 // features without reshaping the response. See version.Capabilities for
 // the current set.
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	resp := struct {
 		version.Info
 		Capabilities []string `json:"capabilities"`
@@ -2761,8 +2664,7 @@ func (s *Server) handleModelCommand(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	if err := manager.ApplyModelSettings(ctx, ch); err != nil {
-		s.logger.Error("Failed to apply model settings", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to apply model settings", err, "conversationID", conversationID)
 		return true
 	}
 	// ApplyModelSettings already broadcast the updated conversation (carrying
@@ -3023,10 +2925,6 @@ func (s *Server) effectiveDefaultModel(modelList []ModelInfo) string {
 
 // handleModels returns the list of available models
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	modelList := s.getModelList()
 	markDefaultModel(modelList, s.effectiveDefaultModel(modelList))
 	w.Header().Set("Content-Type", "application/json")
@@ -3040,10 +2938,6 @@ type builtModelRefresher interface {
 // handleModelRefresh refreshes the non-custom model catalog and returns the
 // same shape as GET /api/models.
 func (s *Server) handleModelRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.refreshBuiltModels == nil {
 		http.Error(w, "model refresh is not configured", http.StatusNotImplemented)
 		return
@@ -3083,10 +2977,6 @@ func markDefaultModel(modelList []ModelInfo, defaultID string) {
 
 // handleTools returns the list of tools available to conversations.
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"tools": claudetool.ToolRegistry,
@@ -3098,10 +2988,6 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 // conversations, returning the same shape as /api/conversations so the UI
 // can render results directly.
 func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	limit := 200
 	offset := 0
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
@@ -3122,8 +3008,7 @@ func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Reques
 	}
 	results, err := s.searchConversationsFTSWithState(r.Context(), query, limit, offset)
 	if err != nil {
-		s.logger.Error("Failed to search conversations", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to search conversations", err)
 		return
 	}
 	if results == nil {
@@ -3135,10 +3020,6 @@ func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Reques
 
 // handleArchivedConversations handles GET /api/conversations/archived
 func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	ctx := r.Context()
 	limit := 5000
 	offset := 0
@@ -3168,8 +3049,7 @@ func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err != nil {
-		s.logger.Error("Failed to get archived conversations", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get archived conversations", err)
 		return
 	}
 
@@ -3179,8 +3059,7 @@ func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Requ
 	}
 	participants, err := s.db.ConversationParticipants(ctx, ids)
 	if err != nil {
-		s.logger.Error("Failed to get archived conversation participants", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get archived conversation participants", err)
 		return
 	}
 	type archivedConversationResponse struct {
@@ -3201,24 +3080,12 @@ func (s *Server) handleArchivedConversations(w http.ResponseWriter, r *http.Requ
 
 // handleArchiveConversation handles POST /conversation/<id>/archive
 func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.db.ArchiveConversation(ctx, conversationID)
 	if err != nil {
-		s.logger.Error("Failed to archive conversation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to archive conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3226,24 +3093,12 @@ func (s *Server) handleArchiveConversation(w http.ResponseWriter, r *http.Reques
 
 // handleUnarchiveConversation handles POST /conversation/<id>/unarchive
 func (s *Server) handleUnarchiveConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.db.UnarchiveConversation(ctx, conversationID)
 	if err != nil {
-		s.logger.Error("Failed to unarchive conversation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to unarchive conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3251,25 +3106,13 @@ func (s *Server) handleUnarchiveConversation(w http.ResponseWriter, r *http.Requ
 
 // handleDeleteConversation handles POST /conversation/<id>/delete
 func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	if err := s.deleteConversation(ctx, conversationID); err != nil {
 		// The terminals are already global at this point. That is harmless and
 		// visible to the user, so no rollback is attempted.
-		s.logger.Error("Failed to delete conversation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to delete conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers about the deletion
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:           "delete",
-		ConversationID: conversationID,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
@@ -3277,11 +3120,6 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 
 // handleConversationBySlug handles GET /api/conversation-by-slug/<slug>
 func (s *Server) handleConversationBySlug(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	slug := strings.TrimPrefix(r.URL.Path, "/api/conversation-by-slug/")
 	if slug == "" {
 		http.Error(w, "Slug required", http.StatusBadRequest)
@@ -3300,8 +3138,7 @@ func (s *Server) handleConversationBySlug(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if err != nil {
-		s.logger.Error("Failed to get conversation by slug", "slug", slug, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation by slug", err, "slug", slug)
 		return
 	}
 
@@ -3316,11 +3153,6 @@ type RenameRequest struct {
 
 // handleRenameConversation handles POST /conversation/<id>/rename
 func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req RenameRequest
@@ -3342,16 +3174,9 @@ func (s *Server) handleRenameConversation(w http.ResponseWriter, r *http.Request
 			http.Error(w, "A conversation with that slug already exists", http.StatusConflict)
 			return
 		}
-		s.logger.Error("Failed to rename conversation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to rename conversation", err, "conversationID", conversationID)
 		return
 	}
-
-	// Notify conversation list subscribers
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3371,11 +3196,6 @@ type SetCwdRequest struct {
 // updated but the running toolset not, or vice versa — is worse than a refused
 // one, because nothing afterwards would notice the disagreement.
 func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req SetCwdRequest
@@ -3435,8 +3255,7 @@ func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request
 	// change visible to a turn that starts moments later.
 	manager, err := s.getOrCreateConversationManager(ctx, conversationID, userEmail)
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager for cwd change", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation manager for cwd change", err, "conversationID", conversationID)
 		return
 	}
 
@@ -3456,21 +3275,15 @@ func (s *Server) handleSetConversationCwd(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Finish or stop the current turn to change the directory", http.StatusConflict)
 			return
 		}
-		s.logger.Error("Failed to change conversation cwd", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to change conversation cwd", err, "conversationID", conversationID)
 		return
 	}
 
 	updated, err := s.db.GetConversationByID(ctx, conversationID)
 	if err != nil {
-		s.logger.Error("Failed to reload conversation after cwd change", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to reload conversation after cwd change", err, "conversationID", conversationID)
 		return
 	}
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: updated,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
@@ -3503,11 +3316,6 @@ func normalizeTags(in []string) []string {
 
 // handleUpdateConversationTags handles POST /conversation/<id>/tags
 func (s *Server) handleUpdateConversationTags(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req TagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -3517,15 +3325,9 @@ func (s *Server) handleUpdateConversationTags(w http.ResponseWriter, r *http.Req
 	tags := normalizeTags(req.Tags)
 	conversation, err := s.db.UpdateConversationTags(r.Context(), conversationID, tags)
 	if err != nil {
-		s.logger.Error("Failed to update conversation tags", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to update conversation tags", err, "conversationID", conversationID)
 		return
 	}
-
-	go s.publishConversationListUpdate(ConversationListUpdate{
-		Type:         "update",
-		Conversation: conversation,
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversation)
@@ -3856,7 +3658,7 @@ func (s *Server) handleSendQueuedNow(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation", err, "conversationID", conversationID)
 		return
 	}
 	if conversation.Archived {
@@ -3865,8 +3667,7 @@ func (s *Server) handleSendQueuedNow(w http.ResponseWriter, r *http.Request, con
 	}
 	manager, err := s.getOrCreateConversationManager(r.Context(), conversationID, r.Header.Get("X-ExeDev-Email"))
 	if err != nil {
-		s.logger.Error("Failed to initialize conversation for send now", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to initialize conversation for send now", err, "conversationID", conversationID)
 		return
 	}
 	if err := manager.SendQueuedNow(r.Context(), s, queuedID); err != nil {
@@ -3890,18 +3691,17 @@ func (s *Server) handleCancelQueued(w http.ResponseWriter, r *http.Request, conv
 
 	// Without an active manager (e.g. after a restart, before the conversation
 	// is opened) the queued_messages array may still hold persisted entries, so
-	// remove them directly and broadcast the row ourselves.
-	var conv *generated.Conversation
+	// remove them directly.
 	err := s.cancelQueuedTranscriptions(ctx, conversationID, queuedID, func() (err error) {
 		switch {
 		case active && queuedID != "":
-			conv, err = manager.CancelQueuedMessage(ctx, s, queuedID)
+			_, err = manager.CancelQueuedMessage(ctx, s, queuedID)
 		case active:
-			conv, err = manager.CancelQueuedMessages(ctx, s)
+			_, err = manager.CancelQueuedMessages(ctx, s)
 		case queuedID != "":
-			conv, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
+			_, err = s.db.RemoveQueuedMessages(ctx, conversationID, queuedID)
 		default:
-			conv, err = s.db.ClearQueuedMessages(ctx, conversationID)
+			_, err = s.db.ClearQueuedMessages(ctx, conversationID)
 		}
 		return err
 	})
@@ -3910,12 +3710,8 @@ func (s *Server) handleCancelQueued(w http.ResponseWriter, r *http.Request, conv
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to cancel queued messages", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to cancel queued messages", err, "conversationID", conversationID)
 		return
-	}
-	if !active {
-		s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: conv})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -3927,11 +3723,6 @@ type RegisterConversationHookRequest struct {
 }
 
 func (s *Server) handleRegisterConversationHook(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req RegisterConversationHookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -3948,13 +3739,11 @@ func (s *Server) handleRegisterConversationHook(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to get conversation manager", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to get conversation manager", err, "conversationID", conversationID)
 		return
 	}
 	if err := manager.RegisterEndOfTurnHook(r.Context(), db.ConversationHook{URL: req.URL}); err != nil {
-		s.logger.Error("Failed to register conversation hook", "conversationID", conversationID, "hook_url", req.URL, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to register conversation hook", err, "conversationID", conversationID, "hook_url", req.URL)
 		return
 	}
 
@@ -3975,11 +3764,6 @@ type ForkRequest struct {
 // messages up to and including a cutoff point, then returns the new
 // conversation so the client can navigate to it.
 func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 
 	var req ForkRequest
@@ -4033,8 +3817,7 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to fork conversation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to fork conversation", err, "conversationID", conversationID)
 		return
 	}
 
@@ -4043,8 +3826,7 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 	// model or reasoning via /model AFTER the cutoff, rewind those changes so
 	// the fork uses what was in effect at the fork point.
 	if err := s.applyForkPointModelState(ctx, conversationID, forked.ConversationID, cutoff); err != nil {
-		s.logger.Error("Failed to set fork-point model state", "conversationID", forked.ConversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to set fork-point model state", err, "conversationID", forked.ConversationID)
 		return
 	}
 
@@ -4072,9 +3854,6 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 	}
-
-	// Notify conversation list subscribers about the new conversation.
-	go s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: forked})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -4171,11 +3950,6 @@ func isUniqueConstraintErr(err error) bool {
 
 // handleStartNewGeneration handles POST /conversation/<id>/new-generation.
 func (s *Server) handleStartNewGeneration(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx := r.Context()
 	conversation, err := s.startNewGeneration(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -4183,8 +3957,7 @@ func (s *Server) handleStartNewGeneration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to start new generation", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to start new generation", err, "conversationID", conversationID)
 		return
 	}
 
@@ -4240,13 +4013,12 @@ func (s *Server) startNewGeneration(ctx context.Context, conversationID string) 
 	if err == nil {
 		for i := range messages {
 			if messages[i].Generation == conversation.CurrentGeneration {
-				s.notifySubscribersNewMessage(ctx, conversationID, &messages[i])
+				s.notifySubscribers(ctx, conversationID, messages[i])
 			}
 		}
 	}
 
 	manager.broadcastStream(StreamResponse{Conversation: &conversation})
-	s.publishConversationListUpdate(ConversationListUpdate{Type: "update", Conversation: &conversation})
 
 	return conversation, nil
 }
@@ -4390,8 +4162,7 @@ func (s *Server) handleCreateDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	conv, err := s.db.CreateDraftConversation(ctx, cwdPtr, &modelID, convOpts, req.Draft)
 	if err != nil {
-		s.logger.Error("Failed to create draft", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to create draft", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -4447,8 +4218,7 @@ func (s *Server) handleUpdateDraft(w http.ResponseWriter, r *http.Request, conve
 		return
 	}
 	if err != nil {
-		s.logger.Error("Failed to update draft", "conversationID", conversationID, "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		s.internalError(w, "Failed to update draft", err, "conversationID", conversationID)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

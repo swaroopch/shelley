@@ -14,9 +14,11 @@ require (
 	github.com/josharian/sockpath v0.0.0-20260904222211-971ecb607ad7
 	github.com/klauspost/compress v1.20.0
 	github.com/pkg/diff v0.0.0-20241224192749-4e6772a4315c
+	github.com/rivo/uniseg v0.4.7
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/samber/slog-http v1.12.1
 	github.com/sashabaranov/go-openai v1.42.0
+	github.com/yuin/goldmark v1.8.5
 	go.skia.org/infra v0.0.0-20260902043405-c28f9d005ea1
 	golang.org/x/crypto v0.56.0
 	golang.org/x/image v0.45.0

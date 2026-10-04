@@ -590,6 +590,9 @@ type QueuedMessage struct {
 	// UserData is message provenance and other presentation metadata captured at
 	// queue time. It is copied to messages.user_data when the item drains.
 	UserData json.RawMessage `json:"user_data,omitempty"`
+	// Inject lets a running turn take the message at its next LLM round
+	// instead of waiting for the turn to end.
+	Inject bool `json:"inject,omitempty"`
 	// ID, CreatedAt, Model, UserEmail, and UserData are shared queue metadata.
 	// Kind, State, Transcription, Error, and the optional ready Llm payload form
 	// the specialized-work variant.
@@ -1434,6 +1437,17 @@ func LatestTurnEndedWithAgent(messages []generated.Message, currentGeneration in
 	return false
 }
 
+// upgradeResumable reports whether an upgrade restart resumes the
+// conversation's interrupted turn: top-level conversations and delegated
+// subagents. Other children are owned by their parent (BTW readers) or by
+// their own recovery (transcription and commit-tour workers).
+func upgradeResumable(conversation generated.Conversation) bool {
+	if conversation.ParentConversationID == nil {
+		return true
+	}
+	return !conversation.UserInitiated && ParseConversationOptions(conversation.ConversationOptions).Kind == ""
+}
+
 // ConsumeResumeAfterUpgrade decides, in a single transaction, what startup does
 // with the agent_working flags left behind by the previous process:
 //
@@ -1441,9 +1455,10 @@ func LatestTurnEndedWithAgent(messages []generated.Message, currentGeneration in
 //     turn_interrupted on every eligible top-level conversation still marked
 //     working, then clear all stale agent_working flags.
 //   - Row present: the previous process exited to install an upgrade. Delete the
-//     row, capture a durable version token for each eligible top-level stale
-//     turn while leaving agent_working true, and return those tokens. Ineligible
-//     stale rows are cleared before listeners open.
+//     row, capture a durable version token for each eligible top-level or
+//     delegated-subagent stale turn (see upgradeResumable) while leaving
+//     agent_working true, and return those tokens. Ineligible stale rows are
+//     cleared before listeners open.
 //
 // The interrupted/working updates share this transaction, so a crash can
 // neither lose the interruption nor expose an interrupted conversation as
@@ -1468,7 +1483,7 @@ func (db *DB) ConsumeResumeAfterUpgrade(ctx context.Context) ([]UpgradeResume, e
 				if err != nil {
 					return err
 				}
-				resumable := conversation.ParentConversationID == nil
+				resumable := upgradeResumable(conversation)
 				var messages []generated.Message
 				if resumable {
 					messages, err = q.ListMessages(ctx, conversationID)
@@ -1523,7 +1538,14 @@ func (db *DB) ConsumeResumeAfterUpgrade(ctx context.Context) ([]UpgradeResume, e
 			}
 			// Managed children already project an idle unfinished turn as
 			// interrupted in the BTW UI. Their parent owns their lifecycle.
+			// Clear a hidden upgrade-resume claim a crashed process left.
 			if conversation.ParentConversationID != nil {
+				if err := q.SetConversationTurnInterrupted(ctx, generated.SetConversationTurnInterruptedParams{
+					TurnInterrupted: false,
+					ConversationID:  conversationID,
+				}); err != nil {
+					return err
+				}
 				continue
 			}
 			messages, err := q.ListMessages(ctx, conversationID)
@@ -2688,6 +2710,24 @@ func (db *DB) SetSetting(ctx context.Context, key, value string) error {
 			Value: value,
 		})
 	})
+}
+
+// InitSetting returns the value stored for key, first storing value if the
+// key is unset. Concurrent callers all see the same winning value.
+func (db *DB) InitSetting(ctx context.Context, key, value string) (string, error) {
+	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		q := generated.New(tx.Conn())
+		stored, err := q.GetSetting(ctx, key)
+		if err == nil {
+			value = stored
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		return q.SetSetting(ctx, generated.SetSettingParams{Key: key, Value: value})
+	})
+	return value, err
 }
 
 // GetAllSettings retrieves all settings

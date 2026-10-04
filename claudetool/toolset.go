@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"time"
 
 	"shelley.exe.dev/claudetool/browse"
 	"shelley.exe.dev/llm"
@@ -69,6 +70,13 @@ type ToolSetConfig struct {
 	SubagentRunner SubagentRunner
 	// SubagentDB is the database for subagent conversations.
 	SubagentDB SubagentDB
+	// ParentMessenger, if set, provides the message_parent tool. The server
+	// sets it only for delegated subagents.
+	ParentMessenger ParentMessenger
+	// BackgroundJobs is told about bash commands moved to the background.
+	BackgroundJobs BackgroundJobs
+	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
+	BashBackgroundAfter time.Duration
 	// ParentConversationID is the ID of the parent conversation (for subagent tool).
 	ParentConversationID string
 	// ConversationID is the ID of the conversation these tools belong to.
@@ -187,6 +195,8 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 		ModelID:          cfg.ModelID,
 		EnableJITInstall: cfg.EnableJITInstall,
 		Env:              env,
+		Jobs:             cfg.BackgroundJobs,
+		BackgroundAfter:  cfg.BashBackgroundAfter,
 	}
 
 	patchProvider, patchProfile := "", "nested"
@@ -210,18 +220,8 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 
 	outputIframeTool := &OutputIframeTool{WorkingDir: wd}
 
-	shellTool := &ShellTool{
-		WorkingDir:       wd,
-		LLMProvider:      cfg.LLMProvider,
-		ModelID:          cfg.ModelID,
-		EnableJITInstall: cfg.EnableJITInstall,
-		Env:              env,
-		BackgroundCtx:    ctx,
-	}
-
 	tools := []*llm.Tool{
 		bashTool.Tool(),
-		shellTool.Tool(),
 		patchTool.Tool(),
 		changeDirTool.Tool(),
 		outputIframeTool.Tool(),
@@ -252,7 +252,11 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			AvailableModels:      availableModels,
 			ParentReasoning:      cfg.ReasoningLevel,
 		}
-		tools = append(tools, subagentTool.Tool())
+		tools = append(tools, subagentTool.Tool(), subagentTool.ListTool())
+	}
+	if cfg.ParentMessenger != nil {
+		messageParentTool := &MessageParentTool{Messenger: cfg.ParentMessenger, ConversationID: cfg.ConversationID}
+		tools = append(tools, messageParentTool.Tool())
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured

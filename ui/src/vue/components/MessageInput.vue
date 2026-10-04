@@ -395,17 +395,18 @@
               :aria-label="
                 autoQueue
                   ? 'Queue message'
-                  : preferCompactAndSend
+                  : compactSendArmed
                     ? 'Compact and send'
                     : t('sendMessage')
               "
               data-testid="send-button"
+              @click="handleSendClick"
             >
               <div v-if="isDisabled || submitting" class="flex items-center justify-center">
                 <div class="spinner spinner-small message-send-spinner-white"></div>
               </div>
               <svg
-                v-else-if="preferCompactAndSend"
+                v-else-if="compactSendArmed"
                 class="compact-send-icon"
                 fill="none"
                 stroke="currentColor"
@@ -502,6 +503,9 @@
                   <line x1="3" y1="21" x2="10" y2="14" />
                 </svg>
                 Compact and send
+                <span class="overflow-menu-shortcut"
+                  ><kbd>{{ compactSendShortcut }}</kbd></span
+                >
               </button>
             </div>
           </div>
@@ -561,6 +565,7 @@ import type {
   RecordingPreparation,
 } from "./recordingDestination";
 import { focusMessageInputIfUnfocused } from "../../utils/focusMessageInput";
+import { isMac } from "../../utils/menuShortcuts";
 import {
   CONCRETE_THINKING_LEVELS,
   supportedThinkingLevels,
@@ -593,10 +598,12 @@ const props = withDefaults(
     recordingInlineAvailable?: boolean;
     /** Async queue handler (awaited). Mirrors React's onQueue prop. */
     onQueue?: (message: string) => Promise<void> | void;
-    /** Async compaction handler (awaited). When provided, the send-options
-     * menu offers "Compact and send": it compacts the conversation and then
-     * queues the composed message so it runs once compaction finishes. */
-    onCompact?: () => Promise<void> | void;
+    /** Async compact-and-queue handler (awaited). When provided, the
+     * send-options menu offers "Compact and send": it compacts the
+     * conversation and then queues the composed message so it runs once
+     * compaction finishes. One handler, so the parent can pin both halves to
+     * the same conversation even if the user navigates away mid-compaction. */
+    onCompactAndQueue?: (message: string) => Promise<void> | void;
     /** Show the split send button with queue chevron (e.g. when in a conversation) */
     showQueueOption?: boolean;
     /** Whether queuing is available right now (agent is working) */
@@ -661,7 +668,7 @@ const { t } = useI18n();
 const hasQueueHandler = computed(() => props.onQueue !== undefined);
 // The "Compact and send" option is available whenever a compaction handler is
 // wired and we're not already mid-compaction (autoQueue signals distilling).
-const canCompact = computed(() => props.onCompact !== undefined && !props.autoQueue);
+const canCompact = computed(() => props.onCompactAndQueue !== undefined && !props.autoQueue);
 const sendSelectedLevel = ref<ContextUsageLevel>("");
 
 const message = ref(props.draftSeed?.value ?? "");
@@ -1104,13 +1111,33 @@ const canSubmit = computed(
 const isDraggingOver = computed(() => dragCounter.value > 0);
 const isShellMode = computed(() => message.value.trimStart().startsWith("!"));
 const isCommand = computed(() => /^[!/]/.test(message.value.trimStart()));
+// Compact-and-send never applies to commands.
+const canCompactAndSend = computed(() => canCompact.value && !isCommand.value);
 const preferCompactAndSend = computed(
   () =>
-    canCompact.value &&
-    hasQueueHandler.value &&
-    !isCommand.value &&
+    canCompactAndSend.value &&
     props.compactSendLevel !== "" &&
     sendSelectedLevel.value !== props.compactSendLevel,
+);
+
+// Mod+Enter (⌘ on mac, Ctrl elsewhere) and mod+click on Send both compact and
+// send. While the mod is held the send button previews that, so track it from
+// every key event's modifier state (not e.key: Meta keyup reports metaKey=false
+// already, and the mod may be released while another key has focus).
+const modHeld = ref(false);
+const compactSendShortcut = isMac ? "\u2318\u21a9" : "Ctrl+Enter";
+function isModEvent(e: KeyboardEvent | MouseEvent) {
+  return e.metaKey || e.ctrlKey;
+}
+function trackMod(e: KeyboardEvent) {
+  modHeld.value = isModEvent(e);
+}
+function clearMod() {
+  modHeld.value = false;
+}
+// What the send button will do right now: threshold-driven or mod-held.
+const compactSendArmed = computed(
+  () => preferCompactAndSend.value || (modHeld.value && canCompactAndSend.value),
 );
 
 // --- @ filename autocomplete --------------------------------------------
@@ -1446,6 +1473,14 @@ watch([composerSession, () => props.compactSendLevel], () => {
   sendSelectedLevel.value = "";
 });
 
+// Mod+click on the send button compacts and sends; the form submit event
+// carries no modifier state, so intercept the click.
+function handleSendClick(e: MouseEvent) {
+  if (!isModEvent(e) || !canCompactAndSend.value || !canSubmit.value) return;
+  e.preventDefault();
+  void handleCompactAndSend();
+}
+
 async function handleSubmit(e: Event) {
   e.preventDefault();
   if (interceptSkillSubmission()) return;
@@ -1535,7 +1570,7 @@ async function handleCompactAndSend() {
     await handleSendNow();
     return;
   }
-  if (hasContent.value && props.onCompact && props.onQueue) {
+  if (hasContent.value && props.onCompactAndQueue) {
     const messageToQueue = composeMessageWithAttachments(message.value).trim();
     const origin = composerOrigin();
     setMessage("");
@@ -1543,10 +1578,7 @@ async function handleCompactAndSend() {
     emit("draft-cleared");
     showQueueMenu.value = false;
     try {
-      // Start compaction first so the conversation enters the distilling
-      // state, then queue — enqueued messages drain after distillation ends.
-      await props.onCompact();
-      await props.onQueue(messageToQueue);
+      await props.onCompactAndQueue(messageToQueue);
     } catch {
       guardComposerClear(origin, composerOrigin, () => setMessage(messageToQueue));
     }
@@ -1724,9 +1756,14 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Enter" && !e.shiftKey) {
+    if (isModEvent(e) && canCompactAndSend.value) {
+      e.preventDefault();
+      if (canSubmit.value) void handleCompactAndSend();
+      return;
+    }
     // On mobile, let Enter create newlines since there's a send button.
     const isMobile = "ontouchstart" in window;
-    if (isMobile && !(e.ctrlKey || e.metaKey)) return;
+    if (isMobile && !isModEvent(e)) return;
     e.preventDefault();
     void handleSubmit(e);
   }
@@ -1756,6 +1793,9 @@ function handleViewportResize() {
 
 onMounted(() => {
   window.addEventListener("resize", handleResize);
+  window.addEventListener("keydown", trackMod);
+  window.addEventListener("keyup", trackMod);
+  window.addEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.addEventListener("resize", handleViewportResize);
   }
@@ -1768,6 +1808,9 @@ onUnmounted(() => {
   recordingSubmission.value?.preparation.release();
   recordingSubmission.value = null;
   window.removeEventListener("resize", handleResize);
+  window.removeEventListener("keydown", trackMod);
+  window.removeEventListener("keyup", trackMod);
+  window.removeEventListener("blur", clearMod);
   if (typeof window !== "undefined" && window.visualViewport) {
     window.visualViewport.removeEventListener("resize", handleViewportResize);
   }

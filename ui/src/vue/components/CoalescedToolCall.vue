@@ -141,6 +141,8 @@ import GenericToolWarning from "./tools/GenericToolWarning.vue";
 import RunningToolTime from "./tools/RunningToolTime.vue";
 import KeywordSearchTool from "./tools/KeywordSearchTool.vue";
 import ChangeDirTool from "./tools/ChangeDirTool.vue";
+import MessageParentTool from "./tools/MessageParentTool.vue";
+import ListSubagentsTool from "./tools/ListSubagentsTool.vue";
 import SubagentTool from "./tools/SubagentTool.vue";
 import LLMOneShotTool from "./tools/LLMOneShotTool.vue";
 import OutputIframeTool from "./tools/OutputIframeTool.vue";
@@ -188,7 +190,6 @@ usePerfLifecycle("toolCall");
 const TOOL_COMPONENTS: Record<string, any> = {
   openai_audio_transcription: AudioTranscriptionTool,
   bash: BashTool,
-  shell: BashTool,
   patch: PatchTool,
   apply_patch: PatchTool,
   browser: BrowserTool,
@@ -197,6 +198,8 @@ const TOOL_COMPONENTS: Record<string, any> = {
   keyword_search: KeywordSearchTool,
   change_dir: ChangeDirTool,
   subagent: SubagentTool,
+  message_parent: MessageParentTool,
+  list_subagents: ListSubagentsTool,
   output_iframe: OutputIframeTool,
   llm_one_shot: LLMOneShotTool,
   browser_emulate: BrowserEmulateTool,

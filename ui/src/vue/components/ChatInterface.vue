@@ -182,11 +182,7 @@
                 :chunk="chunk"
                 :conversation-id="conversationId"
                 :on-open-diff-viewer="handleOpenDiffViewer"
-                :can-request-tour="
-                  !!currentConversation &&
-                  !currentConversation.parent_conversation_id &&
-                  !currentConversation.is_draft
-                "
+                :can-request-tour="canRequestTour"
                 :on-comment-text-change="setDiffCommentText"
                 :on-fork="forkHandler"
               />
@@ -369,9 +365,7 @@
       :on-start-recording="prepareRecording"
       :recording-inline-available="!currentConversation?.archived"
       :on-queue="queueMessage"
-      :on-compact="
-        conversationId && onDistillNewGeneration ? handleDistillCompactNewGeneration : undefined
-      "
+      :on-compact-and-queue="conversationId && onDistillNewGeneration ? compactAndQueue : undefined"
       :show-queue-option="!!conversationId"
       :can-queue="canQueue"
       :auto-queue="autoQueue"
@@ -442,11 +436,7 @@
       :covered="showDiffViewer"
       :can-open-diff="true"
       :conversation-id="conversationId"
-      :can-request-tour="
-        !!currentConversation &&
-        !currentConversation.parent_conversation_id &&
-        !currentConversation.is_draft
-      "
+      :can-request-tour="canRequestTour"
       @close="
         showGitGraph = false;
         focusMessageInputIfUnfocused();
@@ -483,6 +473,9 @@
           ? (conversationId ?? undefined)
           : undefined
       "
+      :start-review-conversation="startReviewConversation"
+      :follow-review-conversation="followReviewConversation"
+      :tour-conversation-id="canRequestTour ? (conversationId ?? undefined) : undefined"
       @close="onDiffViewerClose"
       @comment-text-change="(text) => (diffCommentText = text)"
       @cwd-change="(cwd) => (diffViewerCwd = cwd)"
@@ -502,7 +495,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, useId, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+  reactive,
+  ref,
+  useId,
+  watch,
+} from "vue";
 import Button from "primevue/button";
 import PvMessage from "primevue/message";
 import {
@@ -523,7 +526,7 @@ import {
   queuedTranscriptionPath,
   queuedTranscriptionTaskState,
 } from "../../types";
-import { api } from "../../services/api";
+import { api, ApiError } from "../../services/api";
 import { btwStore } from "../../services/btwStore";
 import { messageStore } from "../../services/messageStore";
 import { cacheDiag } from "../../services/cacheDiag";
@@ -531,6 +534,8 @@ import {
   loadCachedDraft,
   saveCachedDraft,
   clearCachedDraft,
+  rebaseCachedDraft,
+  markCachedDraftPending,
   reconcileComposerDraft,
 } from "../../services/draftCache";
 import { setFaviconStatus } from "../../services/favicon";
@@ -615,6 +620,7 @@ import SystemPromptView from "./SystemPromptView.vue";
 import DirectoryPickerModal from "./DirectoryPickerModal.vue";
 import MessageSelectionToolbar from "./MessageSelectionToolbar.vue";
 import DiffViewer from "./DiffViewer.vue";
+import type { ReviewConversationStart } from "./useReviewRecording";
 import ImageCommentModal from "./ImageCommentModal.vue";
 import GitGraphViewer from "./GitGraphViewer.vue";
 import AgentsMdEditorModal from "./AgentsMdEditorModal.vue";
@@ -749,6 +755,15 @@ const lastMessageId = computed(() => {
 });
 provide("lastMessageId", lastMessageId);
 
+// Tours are built by subagents, which only started top-level conversations
+// can spawn (server/commit_tour_request.go).
+const canRequestTour = computed(
+  () =>
+    !!props.currentConversation &&
+    !props.currentConversation.parent_conversation_id &&
+    !props.currentConversation.is_draft,
+);
+
 // When more than one distinct human user (by exe.dev email) has participated in
 // a conversation, descendant Message components show each user message's author
 // email. Empty-string emails are ignored (unauthenticated/direct access), so a
@@ -877,10 +892,7 @@ function putDraftModel(draftId: string, model: string) {
       if (draftConvId === draftId && conv.updated_at > draftSyncedAt) {
         draftSyncedAt = conv.updated_at;
       }
-      const cur = loadCachedDraft(draftId);
-      if (cur && conv.updated_at > cur.basedOn) {
-        saveCachedDraft(draftId, cur.value, conv.updated_at);
-      }
+      rebaseCachedDraft(draftId, conv.updated_at);
     })
     .catch(() => {})
     .finally(() => {
@@ -2727,7 +2739,7 @@ async function loadMessages(focusedId: string) {
   } catch (err) {
     if (!isCurrent()) return;
     console.error("Failed to load messages:", err);
-    error.value = "Failed to load messages";
+    error.value = err instanceof ApiError ? err.message : "Failed to load messages";
     clearConversationLoading();
   }
 }
@@ -2740,27 +2752,32 @@ const pendingQueuedMessages: {
 }[] = [];
 
 async function queueMessage(message: string) {
-  if (!message.trim() || !props.conversationId) return;
+  if (!props.conversationId) return;
+  await queueMessageTo(props.conversationId, selectedModel.value, message);
+}
+
+async function queueMessageTo(conversationId: string, model: string, message: string) {
+  if (!message.trim()) return;
   // Same guard as sendMessage: a queued turn runs the LLM later, so an
   // unavailable model just defers the confusing "Unsupported model" error.
   // Throws (not returns) so MessageInput's catch restores the composer text.
-  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+  if (!canSendWithModel(model, readyModelIds.value)) {
     const err = new Error(noModelErrorMessage());
     error.value = err.message;
     throw err;
   }
   const pending = {
-    conversationId: props.conversationId,
+    conversationId,
     text: message,
     controller: new AbortController(),
   };
   pendingQueuedMessages.push(pending);
   try {
     await api.sendMessage(
-      props.conversationId,
+      conversationId,
       {
         message: message.trim(),
-        model: selectedModel.value,
+        model,
         queue: true,
       },
       pending.controller.signal,
@@ -2843,6 +2860,56 @@ function buildConversationOptions(): ChatRequest["conversation_options"] | undef
   return {
     ...(hasOverrides ? { tool_overrides: { ...toolOverrides.value } } : {}),
     ...(explicitThinking ? { thinking_level: explicitThinking } : {}),
+  };
+}
+
+// A narrated review recorded outside a live conversation goes, like a
+// composer recording, to this page's draft; if the page has moved on by the
+// time it's sent (or is archived), elsewhere (see ReviewConversationStart).
+function startReviewConversation(): ReviewConversationStart {
+  if (!canSendWithModel(selectedModel.value, readyModelIds.value)) {
+    throw new Error(noModelErrorMessage());
+  }
+  const sessionVersion = draftSessionVersion;
+  const archived = !!props.currentConversation?.archived;
+  const onPage = () => !archived && sessionVersion === draftSessionVersion;
+  const settings = () => ({
+    model: selectedModel.value,
+    conversation_options: buildConversationOptions(),
+  });
+  return {
+    settings: settings(),
+    draft: () => (onPage() ? (draftConvId ?? undefined) : undefined),
+    async resolve(cwd) {
+      if (!onPage()) return undefined;
+      // Read before waiting: the page may change while the draft is made.
+      const now = settings();
+      const conversationId = await ensureDraftConversation(inflightDraft?.text ?? draftText, {
+        model: now.model,
+        cwd,
+      });
+      return { conversationId, settings: now };
+    },
+  };
+}
+
+// Shows the conversation a sent review started, unless the user is in a
+// conversation of their own or has moved on since the send began.
+function followReviewConversation() {
+  const sessionVersion = draftSessionVersion;
+  const wanted = (id: string) => {
+    const viewed = props.currentConversation;
+    const inConversation = !!viewed && !viewed.is_draft && !viewed.archived;
+    return !inConversation && sessionVersion === draftSessionVersion && props.conversationId !== id;
+  };
+  return (id: string) => {
+    if (!wanted(id)) return;
+    api
+      .getConversationBySlug(id)
+      .then((started) => {
+        if (started && wanted(id)) props.onSelectConversation?.(started);
+      })
+      .catch((err) => console.error("Failed to open the review's conversation:", err));
   };
 }
 
@@ -2935,12 +3002,13 @@ function prepareRecording(text: string): RecordingPreparation {
             error.value = null;
             const suffix = context.trim();
             try {
-              await api.sendMessage(conversationId, {
-                message: `${SLASH_COMMANDS.TRANSCRIPTION.command} ${path}${suffix ? `\n${suffix}` : ""}`,
-                ...options,
-              });
+              await postSubmittedDraft(conversationId, text, () =>
+                api.sendMessage(conversationId, {
+                  message: `${SLASH_COMMANDS.TRANSCRIPTION.command} ${path}${suffix ? `\n${suffix}` : ""}`,
+                  ...options,
+                }),
+              );
               accepted = true;
-              clearSubmittedDraft(conversationId, text);
             } catch (err) {
               const detail = err instanceof Error ? err.message : String(err);
               error.value = `Failed to submit recording to ${conversationId}: ${detail}. Retry in that conversation with /transcription ${path}`;
@@ -2964,6 +3032,31 @@ function prepareRecording(text: string): RecordingPreparation {
 function handleRecordingUnsent(path: string, cause: unknown) {
   const detail = cause instanceof Error ? cause.message : String(cause);
   error.value = `${detail}. Retry with /transcription ${path}`;
+}
+
+// Conversation ids with a send from THIS tab in flight. Their pending mirror
+// entries are ours: the reconcile watch must keep treating them as the
+// composer's own text (see CachedDraft.pending), so an echo cannot clear a
+// composer whose send may yet fail.
+const ownSends = new Set<string>();
+
+// postSubmittedDraft runs the chat POST for a composer's text with its mirror
+// entry flagged pending, then clears the accepted text, or unflags it if the
+// POST fails.
+async function postSubmittedDraft<T>(conversationId: string, text: string, post: () => Promise<T>): Promise<T> {
+  const restore = markCachedDraftPending(conversationId, text);
+  ownSends.add(conversationId);
+  let result: T;
+  try {
+    result = await post();
+  } catch (err) {
+    restore();
+    throw err;
+  } finally {
+    ownSends.delete(conversationId);
+  }
+  clearSubmittedDraft(conversationId, text);
+  return result;
 }
 
 function clearSubmittedDraft(conversationId: string, text: string) {
@@ -3076,7 +3169,10 @@ async function sendMessage(message: string) {
         message: trimmedMessage,
         model: selectedModel.value,
       });
-      const cwd = trimmedMessage.split("\n")[1]?.trim() || props.currentConversation?.cwd || selectedCwd.value;
+      const cwd =
+        trimmedMessage.split("\n")[1]?.trim() ||
+        props.currentConversation?.cwd ||
+        selectedCwd.value;
       if (accepted.tour && cwd) {
         applyCommitTourStatus(cwd, accepted.tour.hash, accepted.tour);
         if (accepted.tour.status === "present") {
@@ -3255,11 +3351,11 @@ async function sendMessage(message: string) {
     if (!effectiveId && props.onFirstMessage) {
       await sendFirstMessage(message.trim());
     } else if (effectiveId) {
-      const accepted = await api.sendMessage(effectiveId, request);
-      clearSubmittedDraft(effectiveId, submittedDraft);
+      const id = effectiveId;
+      const accepted = await postSubmittedDraft(id, submittedDraft, () => api.sendMessage(id, request));
       // A queued message starts no turn (e.g. it waits behind a failed
       // recording), so drop the optimistic indicator for the server's state.
-      if (accepted.status === "queued") syncTransientFromStore(effectiveId);
+      if (accepted.status === "queued") syncTransientFromStore(id);
     }
   } catch (err) {
     console.error("Failed to send message:", err);
@@ -3322,6 +3418,19 @@ async function handleDistillCompactNewGeneration(instructions?: string) {
     "compact",
     instructions,
   );
+}
+
+/** Compact, then queue `message` behind the compaction (queued messages drain
+ * once distillation ends). The user may switch conversations while the
+ * compaction request is in flight, so pin the queue to the conversation and
+ * model that were active when they clicked. */
+async function compactAndQueue(message: string) {
+  const conversationId = props.conversationId;
+  if (!conversationId || !props.onDistillNewGeneration) return;
+  const model = selectedModel.value;
+  const cwd = props.currentConversation?.cwd || selectedCwd.value || undefined;
+  await props.onDistillNewGeneration(conversationId, model, cwd, "compact");
+  await queueMessageTo(conversationId, model, message);
 }
 
 async function handleStartNewGeneration() {
@@ -3613,10 +3722,7 @@ async function saveDraft(value: string) {
       if (draftConvId === id && conv.updated_at > draftSyncedAt) {
         draftSyncedAt = conv.updated_at;
       }
-      const cur = loadCachedDraft(id);
-      if (cur && conv.updated_at > cur.basedOn) {
-        saveCachedDraft(id, cur.value, conv.updated_at);
-      }
+      rebaseCachedDraft(id, conv.updated_at);
     }
     return;
   }
@@ -4214,20 +4320,35 @@ watch(
     () => props.currentConversation?.updated_at,
     lazyDraftId,
   ],
-  () => {
+  ([id, isDraft], prev) => {
     perfCount("chat.draftReconcileWatch");
+    const sessionId = props.conversationId ?? null;
+    const cached = loadCachedDraft(sessionId);
+    // The row flipping is_draft true->false in place is the draft being sent.
+    const [prevId, prevIsDraft, prevDraft] = prev ?? [];
+    const promotedFrom =
+      prev && id === prevId && prevIsDraft === true && isDraft === false ? prevDraft || "" : null;
     const result = reconcileComposerDraft({
-      conversationId: props.conversationId ?? null,
+      conversationId: sessionId,
       lazyDraftId: lazyDraftId.value,
-      isDraft: !!props.currentConversation?.is_draft,
+      isDraft: !!isDraft,
       serverDraft: props.currentConversation?.draft || "",
       serverUpdatedAt: props.currentConversation?.updated_at || "",
-      cached: loadCachedDraft(props.conversationId ?? null),
+      cached,
+      ownsPending: sessionId !== null && ownSends.has(sessionId),
+      promotedFrom,
       composerValue: draftText,
       lastSeededSession,
       lastSeededValue,
     });
     if (result === null) return;
+    // Entering a session restores even a pending entry (reload mid-send). Unless
+    // the send is this tab's own (still in flight while we navigated away and
+    // back), it died with its page: the text is a plain draft again, or later
+    // echoes would treat it as departing and clear the composer.
+    if (lastSeededSession !== sessionId && cached?.pending && !ownSends.has(sessionId ?? "")) {
+      saveCachedDraft(sessionId, cached.value, cached.basedOn);
+    }
     draftSyncedAt = result.draftSyncedAt;
     seedComposer(result.value);
     lastSeededValue = result.value;
@@ -4871,13 +4992,15 @@ onMounted(() => {
   document.addEventListener("keydown", handleScrollKeyDown);
   document.addEventListener("keydown", handleMenuShortcut);
   unsubscribeTourRequests = subscribeCommitTourRequests(watchRequestedTour);
-  for (const event of tourActivityEvents) document.addEventListener(event, markTourUserActivity, true);
+  for (const event of tourActivityEvents)
+    document.addEventListener(event, markTourUserActivity, true);
 });
 
 onUnmounted(() => {
   unsubscribeTourRequests?.();
   for (const stop of activeTourRequests.values()) stop();
-  for (const event of tourActivityEvents) document.removeEventListener(event, markTourUserActivity, true);
+  for (const event of tourActivityEvents)
+    document.removeEventListener(event, markTourUserActivity, true);
   teardownSubscriptions();
   stopBottomPin();
   tailSweepToken++; // cancel any in-flight background mount sweep

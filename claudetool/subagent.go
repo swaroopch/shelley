@@ -2,10 +2,10 @@ package claudetool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"shelley.exe.dev/llm"
 )
@@ -13,14 +13,25 @@ import (
 // SubagentRunner is the interface for running a subagent conversation.
 // This is implemented by the server package to avoid import cycles.
 type SubagentRunner interface {
-	// RunSubagent runs a subagent conversation and returns the last response.
-	// If wait is false, it starts processing in background and returns immediately.
-	// timeout is the maximum time to wait for a response.
+	// RunSubagent sends prompt to the subagent conversation and returns an
+	// acknowledgement immediately. The subagent reports back with
+	// message_parent.
 	// modelID is the model to use for the subagent.
 	// reasoning is the user-facing reasoning/thinking level for the subagent
 	// (one of "off", "minimal", "low", "medium", "high", "xhigh", "max");
 	// an empty string means "use the service/conversation default".
-	RunSubagent(ctx context.Context, conversationID, prompt string, wait bool, timeout time.Duration, modelID, reasoning string) (string, error)
+	RunSubagent(ctx context.Context, conversationID, prompt, modelID, reasoning string) (string, error)
+	// ListSubagents returns the delegated subagents of the parent
+	// conversation, oldest first.
+	ListSubagents(ctx context.Context, parentConversationID string) ([]SubagentSummary, error)
+}
+
+// SubagentSummary describes one subagent for list_subagents.
+type SubagentSummary struct {
+	Slug    string
+	Working bool
+	// LastResponse is the subagent's latest agent text, empty if none.
+	LastResponse string
 }
 
 // subagentReasoningLevels are the user-facing reasoning/thinking levels a
@@ -77,21 +88,16 @@ func (s *SubagentTool) lockSlug(slug string) func() {
 
 const subagentName = "subagent"
 
-const (
-	// subagentDefaultTimeout is how long a wait=true call blocks before
-	// returning a progress summary while the subagent keeps running.
-	subagentDefaultTimeout = 15 * time.Minute
-	// subagentMaxTimeout caps an explicit timeout_seconds.
-	subagentMaxTimeout = 60 * time.Minute
-)
-
 const subagentDescription = `Delegate tasks to independent conversations, including parallel or
 output-heavy work whose details should not fill your context.
 
 Use a new slug to start a subagent; reuse its slug to continue that conversation.
+A busy subagent receives the message during its current turn.
 
-The tool returns the subagent's response or a running status, according to wait
-and timeout_seconds.
+The tool returns immediately; the subagent works in the background and reports
+back with messages; its final reply is not forwarded, so ask it to message you
+when it is done. Its messages wake you, so once you have nothing else to do,
+end your turn instead of checking on it; never poll list_subagents in a loop.
 
 Subagents do not inherit your conversation. When writing prompts for subagents,
 convey intent, nuance, and operational details — not just prescriptive instructions.
@@ -141,27 +147,17 @@ func (s *SubagentTool) subagentInputSchema() string {
     },
     "prompt": {
       "type": "string",
-      "description": "The message to send to the subagent. If it is still working, the message is queued until its current turn finishes; it does not interrupt."
-    },
-    "timeout_seconds": {
-      "type": "integer",
-      "description": "How long to wait for a synchronous response, in seconds (default: 900, max: 3600). Only applies when wait=true; ignored otherwise. If the subagent hasn't finished by this deadline, the tool returns a progress summary and the subagent keeps running in the background; its eventual completion will then be delivered asynchronously."
-    },
-    "wait": {
-      "type": "boolean",
-      "description": "Whether to wait for completion (default: true). If false, returns immediately; when the subagent eventually finishes, its response is delivered asynchronously. If wait=true and the subagent completes before timeout, no later asynchronous duplicate is delivered."
+      "description": "The message to send to the subagent. If it is still working, it receives the message during its current turn without being interrupted."
     }%s%s
   }
 }`, modelProp, reasoningProp)
 }
 
 type subagentInput struct {
-	Slug           string `json:"slug"`
-	Prompt         string `json:"prompt"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	Wait           *bool  `json:"wait,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Reasoning      string `json:"reasoning,omitempty"`
+	Slug      string `json:"slug"`
+	Prompt    string `json:"prompt"`
+	Model     string `json:"model,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // Tool returns an llm.Tool for the subagent functionality.
@@ -190,22 +186,6 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 
 	unlockSlug := s.lockSlug(req.Slug)
 	defer unlockSlug()
-
-	// Set defaults. The default wait is generous (15 min) because subagents
-	// commonly run review/analysis tasks that take several minutes; a short
-	// timeout pushed the parent to "hurry" a still-working subagent, which
-	// historically interrupted its turn. Hitting the timeout is not an error
-	// — it returns a progress summary and the subagent keeps running, with its
-	// eventual result delivered asynchronously.
-	timeout := subagentDefaultTimeout
-	if req.TimeoutSeconds > 0 {
-		timeout = min(time.Duration(req.TimeoutSeconds)*time.Second, subagentMaxTimeout)
-	}
-
-	wait := true
-	if req.Wait != nil {
-		wait = *req.Wait
-	}
 
 	// Determine which model to use: explicit choice > parent's model
 	modelID := s.ModelID
@@ -244,8 +224,7 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 		return llm.ErrorfToolOut("failed to get/create subagent conversation: %w", err)
 	}
 
-	// Use the runner to execute the subagent
-	response, err := s.Runner.RunSubagent(ctx, conversationID, req.Prompt, wait, timeout, modelID, reasoning)
+	ack, err := s.Runner.RunSubagent(ctx, conversationID, req.Prompt, modelID, reasoning)
 	if err != nil {
 		return llm.ErrorfToolOut("subagent error: %w", err)
 	}
@@ -257,12 +236,56 @@ func (s *SubagentTool) run(ctx context.Context, req subagentInput) llm.ToolOut {
 	}
 
 	return llm.ToolOut{
-		LLMContent: llm.TextContent(fmt.Sprintf("Subagent '%s' response:%s\n%s", actualSlug, slugNote, response)),
+		LLMContent: llm.TextContent(fmt.Sprintf("Subagent '%s':%s %s", actualSlug, slugNote, ack)),
 		Display: SubagentDisplayData{
 			Slug:           actualSlug,
 			ConversationID: conversationID,
 		},
 	}
+}
+
+const listSubagentsName = "list_subagents"
+
+// ListTool returns the list_subagents tool, which reports this
+// conversation's subagents so the agent can find and address them by slug.
+func (s *SubagentTool) ListTool() *llm.Tool {
+	return &llm.Tool{
+		Name:        listSubagentsName,
+		Description: "List your subagents: each one's slug (use it with the subagent tool), whether it is working, and a preview of its latest response. Don't call this to wait for a subagent: its messages wake you, so end your turn instead.",
+		InputSchema: llm.MustSchema(`{"type": "object", "properties": {}}`),
+		Run: func(ctx context.Context, _ json.RawMessage) llm.ToolOut {
+			subagents, err := s.Runner.ListSubagents(ctx, s.ParentConversationID)
+			if err != nil {
+				return llm.ErrorfToolOut("list subagents: %w", err)
+			}
+			return llm.ToolOut{LLMContent: llm.TextContent(formatSubagentList(subagents))}
+		},
+	}
+}
+
+// subagentPreviewLen caps each latest-response preview in list_subagents.
+const subagentPreviewLen = 200
+
+func formatSubagentList(subagents []SubagentSummary) string {
+	if len(subagents) == 0 {
+		return "No subagents."
+	}
+	var b strings.Builder
+	for _, sa := range subagents {
+		state := "idle"
+		if sa.Working {
+			state = "working"
+		}
+		fmt.Fprintf(&b, "- %s (%s)", sa.Slug, state)
+		if preview := strings.Join(strings.Fields(sa.LastResponse), " "); preview != "" {
+			if r := []rune(preview); len(r) > subagentPreviewLen {
+				preview = string(r[:subagentPreviewLen]) + "..."
+			}
+			fmt.Fprintf(&b, ": %s", preview)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // SubagentDisplayData is the display data sent to the UI for subagent tool results.

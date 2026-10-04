@@ -66,6 +66,7 @@ func requestMentions(req *llm.Request, needle string) bool {
 // Available patterns include:
 //   - "echo: <text>" - echoes the text back
 //   - "bash: <command>" - triggers bash tool with command
+//   - "bash-bg: <command>" - triggers bash tool with background=true
 //   - "think: <thoughts>" - returns response with extended thinking content
 //   - "subagent: <slug> <prompt>" - triggers subagent tool
 //   - "change_dir: <path>" - triggers change_dir tool
@@ -241,7 +242,11 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 		}
 
 		if cmd, ok := strings.CutPrefix(inputText, "bash: "); ok {
-			return s.makeBashToolResponse(cmd, inputTokens), nil
+			return s.makeBashToolResponse(cmd, false, inputTokens), nil
+		}
+
+		if cmd, ok := strings.CutPrefix(inputText, "bash-bg: "); ok {
+			return s.makeBashToolResponse(cmd, true, inputTokens), nil
 		}
 
 		if thoughts, ok := strings.CutPrefix(inputText, "think: "); ok {
@@ -292,7 +297,7 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 				"printf %%s %q | base64 -d > %s && echo %s",
 				inlineImagePNGBase64, inlineImagePath, inlineImageSentinel,
 			)
-			return s.makeBashToolResponse(cmd, inputTokens), nil
+			return s.makeBashToolResponse(cmd, false, inputTokens), nil
 		}
 
 		if inputText == "screenshot image" {
@@ -303,7 +308,11 @@ func (s *Service) Do(ctx context.Context, req *llm.Request) (*llm.Response, erro
 				"mkdir -p %s && printf %%s %q | base64 -d > %s && echo %s",
 				screenshotImageDir, inlineImagePNGBase64, screenshotImagePath, screenshotImageSentinel,
 			)
-			return s.makeBashToolResponse(cmd, inputTokens), nil
+			return s.makeBashToolResponse(cmd, false, inputTokens), nil
+		}
+
+		if text, ok := strings.CutPrefix(inputText, "message_parent: "); ok {
+			return s.makeMessageParentToolResponse(text, inputTokens), nil
 		}
 
 		if path, ok := strings.CutPrefix(inputText, "change_dir: "); ok {
@@ -418,9 +427,12 @@ func (s *Service) makeResponse(text string, inputTokens uint64) *llm.Response {
 }
 
 // makeBashToolResponse creates a response that calls the bash tool
-func (s *Service) makeBashToolResponse(command string, inputTokens uint64) *llm.Response {
+func (s *Service) makeBashToolResponse(command string, background bool, inputTokens uint64) *llm.Response {
 	// Properly marshal the command to avoid JSON escaping issues
-	toolInputData := map[string]string{"command": command}
+	toolInputData := map[string]any{"command": command}
+	if background {
+		toolInputData["background"] = true
+	}
 	toolInputBytes, _ := json.Marshal(toolInputData)
 	toolInput := json.RawMessage(toolInputBytes)
 	responseText := fmt.Sprintf("I'll run the command: %s", command)
@@ -810,6 +822,24 @@ func (s *Service) makeChangeDirToolResponse(path string, inputTokens uint64) *ll
 	}
 }
 
+func (s *Service) makeMessageParentToolResponse(text string, inputTokens uint64) *llm.Response {
+	toolInput, _ := json.Marshal(map[string]string{"text": text})
+	return &llm.Response{
+		ID:    fmt.Sprintf("pred-message_parent-%d", time.Now().UnixNano()),
+		Type:  "message",
+		Role:  llm.MessageRoleAssistant,
+		Model: "predictable-v1",
+		Content: []llm.Content{{
+			ID:        fmt.Sprintf("tool_%d", time.Now().UnixNano()%1000),
+			Type:      llm.ContentTypeToolUse,
+			ToolName:  "message_parent",
+			ToolInput: toolInput,
+		}},
+		StopReason: llm.StopReasonToolUse,
+		Usage:      llm.Usage{InputTokens: inputTokens, OutputTokens: uint64(len(toolInput)/4 + 1), CostUSD: 0.001},
+	}
+}
+
 func (s *Service) makeSubagentToolResponse(slug, prompt string, inputTokens uint64) *llm.Response {
 	toolInputData := map[string]any{
 		"slug":   slug,
@@ -1105,15 +1135,6 @@ func (s *Service) makeToolSmorgasbordResponse(inputTokens uint64) *llm.Response 
 		Type:      llm.ContentTypeToolUse,
 		ToolName:  "browser",
 		ToolInput: json.RawMessage(screencastInput),
-	})
-
-	// shell tool (yielding successor to bash; should reuse BashTool widget)
-	shellInput, _ := json.Marshal(map[string]string{"command": "echo 'hello from shell'"})
-	content = append(content, llm.Content{
-		ID:        fmt.Sprintf("tool_shell_%d", (baseNano+15)%1000),
-		Type:      llm.ContentTypeToolUse,
-		ToolName:  "shell",
-		ToolInput: json.RawMessage(shellInput),
 	})
 
 	return &llm.Response{

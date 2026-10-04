@@ -367,3 +367,23 @@ func TestParsePromptSkillsTemplates(t *testing.T) {
 		})
 	}
 }
+
+// Exercise registration as well as the handler: API method errors must not
+// fall through to the UI catch-all after upstream's routing refactor.
+func TestSkillsRegisteredRoute(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server, _, _ := newTestServer(t)
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+	w, _ := skillsRequest(t, mux, t.TempDir(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET skills: status %d: %s", w.Code, w.Body.String())
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(method, "/api/skills", nil))
+		if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Header().Get("Allow"), http.MethodGet) {
+			t.Fatalf("%s skills: status %d, Allow %q", method, w.Code, w.Header().Get("Allow"))
+		}
+	}
+}

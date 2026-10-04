@@ -132,7 +132,7 @@
     >
       <div class="message-content message-content-entities" data-testid="message-content">
         <div
-          v-if="authorEmail && !conversationSource"
+          v-if="authorEmail && !sender"
           class="message-author-email"
           data-testid="message-author-email"
         >
@@ -159,14 +159,27 @@
             :on-fork="hasForkAction ? handleFork : undefined"
           />
 
-          <ConversationMessageAuthor
-            v-if="conversationSource && entityIndex === 0"
-            :source="conversationSource"
-          />
+          <template v-if="jobNotice">
+            <BackgroundJobNoticeCard
+              v-if="entityIndex === 0"
+              :source="jobNotice"
+              :text="messageText"
+            />
+          </template>
+
+          <template v-else-if="conversationSender">
+            <ConversationMessageCard
+              v-if="entityIndex === 0"
+              :source="conversationSender"
+              :text="messageText"
+              :message-id="message.message_id"
+              :cache-owner="message"
+            />
+          </template>
 
           <!-- Distillation box takes precedence over content blocks. -->
           <div
-            v-if="isDistilledUser"
+            v-else-if="isDistilledUser"
             class="distillation-file-box"
             data-testid="distillation-file-box"
           >
@@ -205,12 +218,12 @@
                 :markdown-text="item.markdownText"
                 :citations="item.citations"
                 :render-markdown="
-                  shouldRenderMarkdown(markdownMode, isUser && !conversationSource, isDistilledUser)
+                  shouldRenderMarkdown(markdownMode, isUser && !sender, isDistilledUser)
                 "
                 :message-id="message.message_id"
                 :cache-owner="message"
                 :run-key="`${entity.key}-${index}`"
-                :rewrite-localhost-links="message.type === 'agent' || !!conversationSource"
+                :rewrite-localhost-links="message.type === 'agent' || !!sender"
               />
               <MessageContentBlock v-else :content="item.content!" />
             </div>
@@ -269,8 +282,9 @@ import MessageContentBlock from "./MessageContentBlock.vue";
 import CitedText from "./CitedText.vue";
 import { coalesceContent, splitContentEntities } from "../../utils/coalesceContent";
 import { perfCount } from "../../utils/perf";
-import { conversationMessageSource } from "../../utils/messageSource";
-import ConversationMessageAuthor from "./ConversationMessageAuthor.vue";
+import { messageSource } from "../../utils/messageSource";
+import ConversationMessageCard from "./ConversationMessageCard.vue";
+import BackgroundJobNoticeCard from "./BackgroundJobNoticeCard.vue";
 import MessageDisplayData from "./MessageDisplayData.vue";
 
 interface ToolDisplay {
@@ -385,10 +399,17 @@ const isError = computed(() => props.message.type === "error");
 // distilled/compacted user messages (which render agent-side and aren't a
 // single person's turn).
 const showUserEmails = inject<ComputedRef<boolean>>("showUserEmails");
-const conversationSource = computed(() =>
-  isUser.value && !isDistilledUser.value
-    ? conversationMessageSource(props.message.user_data)
-    : null,
+const sender = computed(() =>
+  isUser.value && !isDistilledUser.value ? messageSource(props.message.user_data) : null,
+);
+// Background job notices are user messages to the model but bash tool cards
+// to the reader, including notices stored before outcomes were structured.
+const jobNotice = computed(() =>
+  sender.value && "backgroundJobId" in sender.value ? sender.value : null,
+);
+// Messages from another conversation render as a tool card.
+const conversationSender = computed(() =>
+  sender.value && "conversationId" in sender.value ? sender.value : null,
 );
 const authorEmail = computed(() =>
   isUser.value && !isDistilledUser.value && showUserEmails?.value
@@ -495,8 +516,7 @@ const errorMeta = computed(() => {
       retryable = !!ud?.retryable;
       errorType = typeof ud?.error_type === "string" ? ud.error_type : "";
       refusalModel = typeof ud?.refusal_model === "string" ? ud.refusal_model.trim() : "";
-      refusalCategory =
-        typeof ud?.refusal_category === "string" ? ud.refusal_category.trim() : "";
+      refusalCategory = typeof ud?.refusal_category === "string" ? ud.refusal_category.trim() : "";
       refusalExplanation =
         typeof ud?.refusal_explanation === "string" ? ud.refusal_explanation.trim() : "";
     } catch {
@@ -610,7 +630,9 @@ const hasRenderableContent = computed(() => {
 
 // ---- Message container classes ----
 const messageClasses = computed(() => {
-  if (conversationSource.value) return "message message-tool message-conversation";
+  if (jobNotice.value || conversationSender.value) {
+    return "message message-tool message-tool-card";
+  }
   if (isUser.value && !isDistilledUser.value) {
     return "message message-user";
   }
