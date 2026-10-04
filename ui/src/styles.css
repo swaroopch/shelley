@@ -4203,7 +4203,7 @@ diffs-container {
 
 .skill-completion-source {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--font-size-12);
 }
 
 .message-input-container.shell-mode .message-textarea::placeholder {

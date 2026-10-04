@@ -1,5 +1,36 @@
 # This fork's customization workflow
 
+## Manual upstream upgrade (2026-10-03)
+
+The owner approved the merge-based upgrade instead of the generic skill's
+rebase recipe. Preserve append-only `custom` history and the enabled
+`skills-picker`; the main service remains unchanged until separate approval.
+The reviewed upstream tip is `0bfef717` (latest reachable release tag
+`v0.1294.92777367`), integrated on top of published `custom` `fe092729` in a
+separate candidate clone. The sync timer was paused during manual publication;
+restore its previous active state afterward.
+
+Upstream's method-specific API mux conflicted with the skills catalog route.
+Keep upstream routing verbatim and register `GET /api/skills` on its API mux,
+not the outer UI mux. A registered-route regression test verifies GET succeeds
+and unsupported methods return 405 rather than the UI. Keep both the skills
+descriptor and upstream background-job types. The skills source label now uses
+`--font-size-12` (the same 0.75rem size) to satisfy upstream's new CSS lint gate.
+No upstream application behavior or lint baseline is weakened to pass tests.
+
+Validation passed in the separate clone: 34 maintenance tests, both UI type
+checks, lint, 76 UI unit-test files, `make build-custom`, all serial Go packages,
+and 14 browser regressions. A separate read-only integration review found no
+lost upstream behavior. The application tree is unchanged by this results
+record. Follow with a canonical `make build-custom`. Inspect both raw identities
+and full commit messages before pushing; AI assistance is disclosed in prose.
+The previous deployed build is `f2f358f0`; source publication is not deployment.
+Installation still requires the binary and online database backups described
+below. Upstream adds the background-jobs migration, so a deployment rollback
+must restore the matching binary and database together while stopped. If
+validation or publication fails, retain the candidate/logs, leave the deployed
+binary alone, and inspect remote movement rather than force-pushing.
+
 ## Current policy: skills picker pending upstream (2026-09-27)
 
 The owner explicitly approved implementing `/skills`, integrating it into `custom`,
