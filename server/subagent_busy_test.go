@@ -1,7 +1,11 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,28 +26,65 @@ func TestSubagentBusy(t *testing.T) {
 	t.Run("DeliversDurableInjectionMidTurn", testSubagentBusy_DeliversDurableInjectionMidTurn)
 }
 
-// list_subagents reports each delegated subagent's slug, working state, and
-// latest response, as the agent sees it through the tool.
-func TestListSubagentsTool(t *testing.T) {
+// The subagent tool description carries a query listing this conversation's
+// subagents with their working state and latest reply. Run it against a real
+// database so it keeps matching the schema.
+func TestSubagentToolDescriptionListsSubagents(t *testing.T) {
 	f := newSubagentDoneFixture(t, "Found three\nflaky tests.")
 	defer stopActiveConversationLoops(f.server)
-	tool := (&claudetool.SubagentTool{
-		ParentConversationID: f.parentID,
-		Runner:               NewSubagentRunner(f.server),
-	}).ListTool()
-
-	out := tool.Run(t.Context(), json.RawMessage(`{}`))
-	if out.Error != nil {
-		t.Fatal(out.Error)
+	ctx := t.Context()
+	// Workers and the source of a distill are children too, but not
+	// subagents the agent can address.
+	if _, err := f.database.CreateCommitTourWorker(ctx, f.parentID, t.TempDir(), "predictable", commitTourWorkerOptions()); err != nil {
+		t.Fatal(err)
 	}
-	if got, want := out.LLMContent[0].Text, "- sub-test (idle): Found three flaky tests.\n"; got != want {
-		t.Fatalf("idle listing = %q, want %q", got, want)
+	distilled, err := f.database.CreateConversation(ctx, strPtr("distilled-prev"), true, nil, nil, db.ConversationOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	if _, err := f.database.UpdateConversationParent(ctx, distilled.ConversationID, f.parentID); err != nil {
+		t.Fatal(err)
+	}
 	f.subagentMgr.SetAgentWorking(true)
-	out = tool.Run(t.Context(), json.RawMessage(`{}`))
-	if !strings.Contains(out.LLMContent[0].Text, "- sub-test (working)") {
-		t.Fatalf("working listing = %q", out.LLMContent[0].Text)
+
+	desc := (&claudetool.SubagentTool{DBPath: "/data/shelley.db"}).Tool().Description
+	m := regexp.MustCompile(`sqlite3 -json "([^"]*)" "([^"]*)"`).FindStringSubmatch(desc)
+	if m == nil {
+		t.Fatalf("description has no subagent query:\n%s", desc)
+	}
+	if m[1] != "/data/shelley.db" {
+		t.Fatalf("query database = %q, want /data/shelley.db", m[1])
+	}
+	query := strings.ReplaceAll(m[2], "$SHELLEY_CONVERSATION_ID", f.parentID)
+
+	type row struct {
+		slug      string
+		working   bool
+		lastReply string
+	}
+	var got []row
+	if err := f.database.Pool().Rx(ctx, func(ctx context.Context, rx *db.Rx) error {
+		rows, err := rx.Query(query)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r row
+			var lastReply sql.NullString
+			if err := rows.Scan(&r.slug, &r.working, &lastReply); err != nil {
+				return err
+			}
+			r.lastReply = lastReply.String
+			got = append(got, r)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("run %q: %v", query, err)
+	}
+	want := []row{{slug: "sub-test", working: true, lastReply: "Found three\nflaky tests."}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("query rows = %+v, want %+v", got, want)
 	}
 }
 
@@ -145,6 +186,9 @@ func testSubagentBusy_DeliversDurableInjectionMidTurn(t *testing.T) {
 	if _, err := runner.RunSubagent(t.Context(), f.subagentID, "bash: sleep 1", "predictable", ""); err != nil {
 		t.Fatalf("RunSubagent(start): %v", err)
 	}
+	// As in DeliversMidTurn: queue only once the tool runs, or the turn's
+	// first request may take the message before the tool result exists.
+	waitForToolUseRecorded(t, f.database, f.subagentID)
 	if _, err := f.database.AppendQueuedMessage(t.Context(), f.subagentID, db.QueuedMessage{
 		ID:        "durable-steer",
 		Llm:       []byte(`{"Role":0,"Content":[{"Type":2,"Text":"echo: steered"}]}`),

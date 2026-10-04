@@ -73,10 +73,15 @@ type ToolSetConfig struct {
 	// ParentMessenger, if set, provides the message_parent tool. The server
 	// sets it only for delegated subagents.
 	ParentMessenger ParentMessenger
+	// InPlaceCompactor, if set, provides the compact_in_place tool (off
+	// unless enabled by ToolOverrides).
+	InPlaceCompactor InPlaceCompactor
 	// BackgroundJobs is told about bash commands moved to the background.
 	BackgroundJobs BackgroundJobs
 	// BashBackgroundAfter overrides DefaultBashBackgroundAfter when nonzero.
 	BashBackgroundAfter time.Duration
+	// DBPath is the Shelley database, named in the subagent tool's description.
+	DBPath string
 	// ParentConversationID is the ID of the parent conversation (for subagent tool).
 	ParentConversationID string
 	// ConversationID is the ID of the conversation these tools belong to.
@@ -251,12 +256,17 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			ModelID:              cfg.ModelID, // Inherit parent's model
 			AvailableModels:      availableModels,
 			ParentReasoning:      cfg.ReasoningLevel,
+			DBPath:               cfg.DBPath,
 		}
-		tools = append(tools, subagentTool.Tool(), subagentTool.ListTool())
+		tools = append(tools, subagentTool.Tool())
 	}
 	if cfg.ParentMessenger != nil {
 		messageParentTool := &MessageParentTool{Messenger: cfg.ParentMessenger, ConversationID: cfg.ConversationID}
 		tools = append(tools, messageParentTool.Tool())
+	}
+
+	if cfg.InPlaceCompactor != nil {
+		tools = append(tools, CompactInPlaceTool(cfg.InPlaceCompactor))
 	}
 
 	// Add LLM one-shot tool if LLM provider is configured
