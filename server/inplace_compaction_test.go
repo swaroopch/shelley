@@ -20,7 +20,11 @@ import (
 )
 
 func textItem(seq int64, role llm.MessageRole, text string) contextItem {
-	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq}, message: llm.Message{Role: role, Content: []llm.Content{{Type: llm.ContentTypeText, Text: text}}}}
+	typ := string(db.MessageTypeAgent)
+	if role == llm.MessageRoleUser {
+		typ = string(db.MessageTypeUser)
+	}
+	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq, Type: typ}, message: llm.Message{Role: role, Content: []llm.Content{{Type: llm.ContentTypeText, Text: text}}}}
 }
 
 func TestApplyInPlaceCompaction(t *testing.T) {
@@ -107,6 +111,8 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 		slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
 		false, "model-a", "")
 	srv.hooksDir = t.TempDir()
+	// The listing leaves out the recent part; keep it to the last message.
+	srv.piDistillKeepRecentTokens = 1
 	ctx := t.Context()
 
 	modelA := "model-a"

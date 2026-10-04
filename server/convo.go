@@ -195,8 +195,8 @@ type ConversationManager struct {
 	// in-place compaction (compact_in_place) that its history does not yet
 	// reflect; takeInjectable swaps in the rebuilt history. Guarded by cm.mu.
 	compactedGeneration uint64
-	// keepRecentTokens is the budget of the recent part compact_in_place may
-	// not collapse.
+	// keepRecentTokens is the budget of the recent part compact_in_place
+	// leaves as it is.
 	keepRecentTokens int
 }
 
@@ -1351,7 +1351,9 @@ func (cm *ConversationManager) takeInjectable(ctx context.Context, generation ui
 			inj.Messages = append(inj.Messages, fed)
 		}
 	}
-	if nudger != nil {
+	// Right after a compaction the nudger only knows the size from before
+	// it; the next response reports the new one.
+	if nudger != nil && !compacted {
 		if text, ok := nudger.take(); ok {
 			nudge, err := cm.recordContextNudge(ctx, text)
 			if err != nil {

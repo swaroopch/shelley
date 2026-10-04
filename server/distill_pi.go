@@ -96,7 +96,7 @@ const piCompactionSummarySuffix = `
 </summary>`
 
 // keepRecentTokens is the budget of recent history kept verbatim: by pi
-// distillation, and as the recent part compact_in_place may not collapse.
+// distillation, and as the recent part compact_in_place leaves as it is.
 func (s *Server) keepRecentTokens() int {
 	if s.piDistillKeepRecentTokens > 0 {
 		return s.piDistillKeepRecentTokens
@@ -104,15 +104,19 @@ func (s *Server) keepRecentTokens() int {
 	return defaultPiDistillSettings.keepRecentTokens
 }
 
+// piImageTokens is pi's estimate for an image (4800 chars). The size of its
+// base64 data says little: a 1280x720 screenshot is ~1.2k tokens.
+const piImageTokens = 1200
+
 // estimatePiMessageTokens ports pi's character/4 heuristic for one message.
 func estimatePiMessageTokens(msg llm.Message) int {
-	chars := 0
+	chars, images := 0, 0
 	for _, c := range msg.Content {
 		switch c.Type {
 		case llm.ContentTypeText:
 			chars += len(c.Text)
 			if c.MediaType != "" {
-				chars += len(c.Data)
+				images++
 			}
 		case llm.ContentTypeThinking, llm.ContentTypeRedactedThinking:
 			chars += len(c.Thinking)
@@ -122,13 +126,13 @@ func estimatePiMessageTokens(msg llm.Message) int {
 			for _, r := range c.ToolResult {
 				chars += len(r.Text)
 				if r.MediaType != "" {
-					chars += len(r.Data)
+					images++
 				}
 			}
 		}
 	}
 	// ceil(chars / 4)
-	return (chars + 3) / 4
+	return (chars+3)/4 + images*piImageTokens
 }
 
 // isToolResultMessage reports whether a message carries only tool_result
@@ -171,7 +175,10 @@ func findPiCutPoint(messages []llm.Message, keepRecentTokens int) int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		accumulated += estimatePiMessageTokens(messages[i])
 		if accumulated >= keepRecentTokens {
-			// Pick the first valid cut point at or after i.
+			// Pick the first valid cut point at or after i. If a tool
+			// result alone fills the budget there is none: keep it with
+			// its call, the last cut point.
+			cutIndex = cutPoints[len(cutPoints)-1]
 			for _, c := range cutPoints {
 				if c >= i {
 					cutIndex = c

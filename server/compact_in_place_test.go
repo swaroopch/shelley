@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -194,11 +195,18 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 		"dead ends",
 		fmt.Sprintf("%d  ", helloSeq),
 		"bash output (trim " + firstUseID + ")",
-		"--- recent part: cannot be collapsed ---",
+		"is kept as is and not listed",
 	} {
 		if !strings.Contains(index, want) {
 			t.Fatalf("index missing %q:\n%s", want, index)
 		}
+	}
+	if want := regexp.MustCompile(fmt.Sprintf(`(?m)^%d +user\* `, helloSeq)); !want.MatchString(index) {
+		t.Fatalf("index does not mark the user's message with *:\n%s", index)
+	}
+	// The recent part (the index request) is not listed.
+	if strings.Contains(index, `"compact_in_place: `) {
+		t.Fatalf("index lists the recent part:\n%s", index)
 	}
 
 	compact := func(trim []string, collapse ...claudetool.CompactCollapse) {
@@ -208,9 +216,10 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 	}
 	seq := func(n int64) claudetool.IndexID { return claudetool.IndexID(fmt.Sprint(n)) }
 	for want, collapse := range map[string]claudetool.CompactCollapse{
-		"unknown id":          {From: "999999", To: seq(hiSeq), Note: "x"},
-		"from comes after to": {From: seq(hiSeq), To: seq(helloSeq), Note: "x"},
-		"note is not shorter": {From: seq(helloSeq), To: seq(hiSeq), Note: strings.Repeat("long ", 100)},
+		"unknown id":           {From: "999999", To: seq(hiSeq), Note: "x"},
+		"from comes after to":  {From: seq(hiSeq), To: seq(helloSeq), Note: "x"},
+		"note is not shorter":  {From: seq(hiSeq), To: seq(hiSeq), Note: strings.Repeat("long ", 100)},
+		"only be collapsed on": {From: seq(helloSeq), To: seq(hiSeq), Note: "x"},
 	} {
 		compact(nil, collapse)
 		if out, isErr := c.lastToolOutput(); !isErr || !strings.Contains(out, want) {
@@ -225,7 +234,7 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 		t.Fatalf("invalid requests recorded %d compactions", n)
 	}
 
-	compact([]string{firstUseID}, claudetool.CompactCollapse{From: seq(helloSeq), To: seq(hiSeq), Note: "GREETED"})
+	compact([]string{firstUseID}, claudetool.CompactCollapse{From: seq(hiSeq), To: seq(hiSeq), Note: "GREETED"})
 	if out, isErr := c.lastToolOutput(); isErr || !strings.Contains(out, "Compacted: 1 collapsed, 1 trimmed") {
 		t.Fatalf("compact: %q", out)
 	}
@@ -238,8 +247,8 @@ func TestCompactInPlaceEndToEnd(t *testing.T) {
 	check := func(req *llm.Request) {
 		t.Helper()
 		got := requestDump(req)
-		if first := req.Messages[0].Content[0].Text; first != compactionNoteText(c.id, helloSeq, hiSeq, "GREETED") {
-			t.Fatalf("first message is not the note:\n%s", got)
+		if second := req.Messages[1].Content[0].Text; second != compactionNoteText(c.id, hiSeq, hiSeq, "GREETED") {
+			t.Fatalf("second message is not the note:\n%s", got)
 		}
 		for _, m := range req.Messages {
 			for _, ct := range m.Content {
@@ -331,6 +340,32 @@ func TestCompactInPlaceNudge(t *testing.T) {
 	if got := requestDump(c.ps.GetLastRequest()); strings.Contains(got, "Context is") {
 		t.Fatalf("nudge still in context after compaction:\n%s", got)
 	}
+
+	// The response that makes a compact call crosses the next nudge level
+	// (here, as its input carries a long message). Right after the
+	// compaction that size is stale: no nudge.
+	c.turn("bash: echo AGAIN")
+	useID = c.rows()[c.seqWith(`AGAIN\n`)].Content[0].ToolUseID
+	size := lastContextWindowSize(listMessages(t, c.database, c.id))
+	if err := c.database.UpdateConversationOptions(t.Context(), c.id, db.ConversationOptions{
+		ToolOverrides:      map[string]string{claudetool.CompactInPlaceName: "on"},
+		CompactNudgeTokens: int(size) + 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := c.srv.getOrCreateConversationManager(t.Context(), c.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.ResetLoop()
+	before := len(nudges())
+	c.turn(`compact_in_place: {"action":"compact","trim":["` + useID + `"]}` + strings.Repeat(" ", 2000))
+	if out, isErr := c.lastToolOutput(); isErr {
+		t.Fatalf("compact: %s", out)
+	}
+	if got := nudges(); len(got) != before {
+		t.Fatalf("nudged with the size from before the compaction: %v", got[before:])
+	}
 }
 
 func TestContextNudger(t *testing.T) {
@@ -357,18 +392,190 @@ func TestContextNudger(t *testing.T) {
 	}
 }
 
+func callItem(seq int64, id string) contextItem {
+	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq, Type: string(db.MessageTypeAgent)}, message: llm.Message{Role: llm.MessageRoleAssistant, Content: []llm.Content{
+		{Type: llm.ContentTypeToolUse, ID: id, ToolName: "bash"},
+	}}}
+}
+
+func outputItem(seq int64, id, text string) contextItem {
+	// Like a stored tool output, which is a user message that carries only results.
+	return contextItem{from: seq, to: seq, source: &generated.Message{SequenceID: seq, Type: string(db.MessageTypeUser)}, message: llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
+		{Type: llm.ContentTypeToolResult, ToolUseID: id, ToolResult: []llm.Content{{Type: llm.ContentTypeText, Text: text}}},
+	}}}
+}
+
+// TestBuildCompactionKeepsCallsWithOutputs: a range may neither start on a
+// tool output nor end on a tool call, and the other problems of the request
+// are reported with it.
+func TestBuildCompactionKeepsCallsWithOutputs(t *testing.T) {
+	out := strings.Repeat("x", 400)
+	items := []contextItem{
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"), outputItem(3, "a", out),
+		callItem(4, "b"), outputItem(5, "b", out),
+		textItem(6, llm.MessageRoleAssistant, "done"),
+		textItem(7, llm.MessageRoleAssistant, strings.Repeat("x", 4*25_000)),
+	}
+	col := func(from, to claudetool.IndexID, note string) claudetool.CompactCollapse {
+		return claudetool.CompactCollapse{From: from, To: to, Note: note}
+	}
+	_, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{
+		col("3", "6", "n"), col("4", "4", "n"), col("2", "3", ""), col("3", "4", "n"),
+	}})
+	want := "4 problems. Nothing was compacted; fix them and send the whole request again:\n" +
+		"- collapse 3-6: starts with a tool output, which must stay with its call; start at the call before it, or after the output\n" +
+		"- collapse 4-4: ends with a tool call, which must stay with its output; extend it to include the output, or end before the call\n" +
+		"- collapse 2-3: note is empty\n" +
+		"- collapse 3-4: starts with a tool output"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("got %v", err)
+	}
+	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("2", "3", "n"), col("4", "6", "n")}})
+	if err != nil || len(c.Squishes) != 2 {
+		t.Fatalf("%+v, %v", c, err)
+	}
+}
+
+func compactCallItem(seq int64, id string) contextItem {
+	it := callItem(seq, id)
+	it.message.Content[0].ToolName = claudetool.CompactInPlaceName
+	return it
+}
+
+func nudgeItem(seq int64) contextItem {
+	it := textItem(seq, llm.MessageRoleUser, "Context is 160k.")
+	nudge := `{"context_nudge":true}`
+	it.source.UserData = &nudge
+	return it
+}
+
+// recentID returns the id of the first row of the recent part of history.
+func recentID(t *testing.T, history []contextItem, keepRecentTokens int) string {
+	t.Helper()
+	view, err := compactionView(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := recentStart(view, keepRecentTokens)
+	if r >= len(view) {
+		t.Fatalf("recent start %d of %d rows", r, len(view))
+	}
+	return itemID(view[r])
+}
+
+// TestRecentPartIgnoresCompacting: the recent part starts where it did before
+// the agent began compacting, however much the index output, the nudge and the
+// compact call that is running add.
+func TestRecentPartIgnoresCompacting(t *testing.T) {
+	big := strings.Repeat("x", 4*15_000) // ~15k tokens
+	history := []contextItem{
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"),
+		outputItem(3, "a", big),
+		callItem(4, "b"),
+		outputItem(5, "b", big),
+		textItem(6, llm.MessageRoleAssistant, "done"),
+		textItem(7, llm.MessageRoleUser, big+big),
+		callItem(8, "c"),
+		outputItem(9, "c", "out"),
+		textItem(10, llm.MessageRoleAssistant, "ok"),
+	}
+	if got := recentID(t, history, 20_000); got != "7" {
+		t.Fatalf("recent part starts at %s, want 7", got)
+	}
+	running := compactCallItem(14, "compact")
+	running.message.Content[0].ToolInput = json.RawMessage(`"` + big + `"`)
+	compacting := append(slices.Clone(history),
+		nudgeItem(11), compactCallItem(12, "index"), outputItem(13, "index", big), running)
+	if got := recentID(t, compacting, 20_000); got != "7" {
+		t.Fatalf("recent part starts at %s while compacting, want 7", got)
+	}
+	// A single tool output that fills the budget stays with its call.
+	huge := append(slices.Clone(history[:6]), callItem(7, "d"), outputItem(8, "d", strings.Repeat("x", 4*25_000)), compactCallItem(9, "compact"))
+	if got := recentID(t, huge, 20_000); got != "7" {
+		t.Fatalf("recent part starts at %s after a huge output, want 7 (its call)", got)
+	}
+}
+
+// TestRecentPartHoldsWithParallelCalls: the call that is running shares its
+// message with another call; when the calls finish, that message is still
+// there, so the recent part must not start later than it did while they ran.
+func TestRecentPartHoldsWithParallelCalls(t *testing.T) {
+	big := strings.Repeat("x", 4*15_000)
+	parallel := callItem(3, "a")
+	parallel.message.Content[0].ToolInput = json.RawMessage(`"` + big + `"`)
+	parallel.message.Content = append(parallel.message.Content, compactCallItem(3, "index").message.Content[0])
+	running := []contextItem{textItem(1, llm.MessageRoleUser, "do it"), textItem(2, llm.MessageRoleAssistant, "ok"), parallel}
+	done := append(slices.Clone(running), outputItem(4, "a", "out"), outputItem(5, "index", "index"))
+	if got, want := recentID(t, running, 10_000), recentID(t, done, 10_000); got != "3" || want != "3" {
+		t.Fatalf("recent part starts at %s while the calls run, at %s after: want 3 both times", got, want)
+	}
+}
+
+// TestIndexSkipsEvidenceOfEarlierAttempts: an earlier index call, its output
+// and a nudge are hidden by the next compaction, so the index does not list
+// them.
+func TestIndexSkipsEvidenceOfEarlierAttempts(t *testing.T) {
+	history := []contextItem{
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"),
+		outputItem(3, "a", "small"),
+		nudgeItem(4),
+		compactCallItem(5, "index"),
+		outputItem(6, "index", "index"),
+		textItem(7, llm.MessageRoleUser, "go on"),
+		textItem(8, llm.MessageRoleAssistant, strings.Repeat("x", 4*15_000)),
+		textItem(9, llm.MessageRoleUser, "and on"),
+	}
+	index, err := compactIndex(history, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, table, _ := strings.Cut(index, "```\n")
+	rows := regexp.MustCompile(`(?m)^(\d+) `).FindAllStringSubmatch(table, -1)
+	var ids []string
+	for _, r := range rows {
+		ids = append(ids, r[1])
+	}
+	if got := strings.Join(ids, " "); got != "1 2 3 7 8" {
+		t.Errorf("index lists rows %s, want 1 2 3 7 8 (the work, then not the recent part from 9):\n%s", got, index)
+	}
+}
+
+func TestBuildCompactionTrimsOnlyOlderOutputs(t *testing.T) {
+	history := []contextItem{
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"), outputItem(3, "a", "old"),
+		callItem(4, "b"), outputItem(5, "b", "new"),
+	}
+	// The recent part is the last call and its output.
+	c, err := buildCompaction(history, 1, claudetool.CompactInPlaceInput{Trim: []string{"a"}})
+	if err != nil || len(c.Trims) != 1 || c.Trims[0].SequenceID != 3 {
+		t.Fatalf("trim a: %+v, %v", c, err)
+	}
+	_, err = buildCompaction(history, 1, claudetool.CompactInPlaceInput{Trim: []string{"b"}})
+	if err == nil || !strings.Contains(err.Error(), "trim b: in the recent part, which is kept as is") {
+		t.Fatalf("trim b: %v", err)
+	}
+}
+
 func TestBuildCompaction(t *testing.T) {
 	big := strings.Repeat("x", 4*15_000) // ~15k tokens
 	items := []contextItem{
-		textItem(1, llm.MessageRoleUser, big),
-		textItem(2, llm.MessageRoleAssistant, big),
-		textItem(3, llm.MessageRoleUser, "a"),
-		textItem(4, llm.MessageRoleAssistant, "b"),
-		textItem(5, llm.MessageRoleUser, "c"),
-		textItem(6, llm.MessageRoleAssistant, big+big),
+		textItem(1, llm.MessageRoleUser, "do it"),
+		callItem(2, "a"),
+		outputItem(3, "a", strings.Repeat("x", 4*25_000)),
+		textItem(4, llm.MessageRoleAssistant, big),
+		textItem(5, llm.MessageRoleAssistant, "a"),
+		textItem(6, llm.MessageRoleUser, "also this"),
+		textItem(7, llm.MessageRoleUser, "and that"),
+		textItem(8, llm.MessageRoleAssistant, "b"),
+		textItem(9, llm.MessageRoleAssistant, "c"),
+		textItem(10, llm.MessageRoleAssistant, big+big),
 	}
 	// The recent part is the last message.
-	if r := recentStart(items, 20_000); r != 5 {
+	if r := recentStart(items, 20_000); r != 9 {
 		t.Fatalf("recent start = %d", r)
 	}
 	col := func(from, to claudetool.IndexID) claudetool.CompactCollapse {
@@ -376,22 +583,69 @@ func TestBuildCompaction(t *testing.T) {
 	}
 	for want, in := range map[string]claudetool.CompactInPlaceInput{
 		"nothing to compact": {},
-		"recent part":        {Collapse: []claudetool.CompactCollapse{col("5", "6")}},
-		"at most":            {Collapse: []claudetool.CompactCollapse{col("1", "3")}},
-		"overlaps":           {Collapse: []claudetool.CompactCollapse{col("2", "4"), col("4", "5")}},
-		"note is empty":      {Collapse: []claudetool.CompactCollapse{{From: "3", To: "4"}}},
+		"recent part":        {Collapse: []claudetool.CompactCollapse{col("9", "10")}},
+		"at most":            {Collapse: []claudetool.CompactCollapse{col("2", "4")}},
+		"overlaps":           {Collapse: []claudetool.CompactCollapse{col("8", "9"), col("9", "9")}},
+		"note is empty":      {Collapse: []claudetool.CompactCollapse{{From: "8", To: "9"}}},
+		// The user's messages may only be collapsed on their own.
+		"collapse 5-8: covers 6, which can only be collapsed on its own; collapse e.g. 5, 8 instead":             {Collapse: []claudetool.CompactCollapse{col("5", "8")}},
+		"collapse 6-7: covers 6, which can only be collapsed on its own; collapse each of those rows on its own": {Collapse: []claudetool.CompactCollapse{col("6", "7")}},
 	} {
 		if _, err := buildCompaction(items, 20_000, in); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want error %q, got %v", want, err)
 		}
 	}
-	// Over the limit is fine for a single message or call-and-output pair.
-	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("3", "5"), col("1", "2")}})
+	// Every problem is reported at once, and nothing is compacted.
+	_, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{
+		Trim:     []string{"nope"},
+		Collapse: []claudetool.CompactCollapse{col("99", "2"), col("2", "4")},
+	})
+	want := "3 problems. Nothing was compacted; fix them and send the whole request again:\n" +
+		"- trim nope: no tool output with that id in the index\n" +
+		"- collapse 99-2: unknown id; use ids from the index\n" +
+		"- collapse 2-4: covers ~"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("want error starting %q, got %v", want, err)
+	}
+	// Over the limit is fine for one tool call and its output, and a user
+	// message may be collapsed on its own.
+	c, err := buildCompaction(items, 20_000, claudetool.CompactInPlaceInput{Collapse: []claudetool.CompactCollapse{col("8", "9"), col("2", "3"), col("6", "6"), col("1", "1")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Squishes) != 2 || c.Squishes[0].FromSequenceID != 1 || c.Squishes[0].ToSequenceID != 2 || c.Squishes[1].ToSequenceID != 5 {
-		t.Fatalf("squishes = %+v", c.Squishes)
+	var got []string
+	for _, s := range c.Squishes {
+		got = append(got, fmt.Sprintf("%d-%d", s.FromSequenceID, s.ToSequenceID))
+	}
+	if g := strings.Join(got, " "); g != "1-1 2-3 6-6 8-9" {
+		t.Fatalf("squishes %s", g)
+	}
+}
+
+func TestCollapsesAlone(t *testing.T) {
+	withUserData := func(it contextItem, ud string) contextItem {
+		it.source.UserData = &ud
+		return it
+	}
+	for _, tc := range []struct {
+		it   contextItem
+		want bool
+	}{
+		{textItem(1, llm.MessageRoleUser, "fix it"), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "summary"), `{"distilled":"true","distillation_content":"summary"}`), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "do this"), `{"sender_conversation_id":"c1","sender_relationship":"parent"}`), true},
+		{withUserData(textItem(1, llm.MessageRoleUser, "found it"), `{"sender_conversation_id":"c2","sender_relationship":"subagent"}`), false},
+		{contextItem{noteID: "s5.0", note: "earlier"}, true},
+		{textItem(1, llm.MessageRoleAssistant, "done"), false},
+		{outputItem(1, "a", "out"), false},
+	} {
+		got, err := collapsesAlone(tc.it)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %v, %v", tc.it, got, err)
+		}
+	}
+	if _, err := collapsesAlone(withUserData(textItem(1, llm.MessageRoleUser, "x"), `{`)); err == nil {
+		t.Error("malformed user data: want an error")
 	}
 }
 
