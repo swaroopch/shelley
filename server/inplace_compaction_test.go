@@ -161,23 +161,15 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 	hiSeq := seqOf(db.MessageTypeAgent, "Well, hi there!")
 	toolUseSeq := seqOf(db.MessageTypeAgent, `"ToolName":"bash"`)
 	toolResultSeq := seqOf(db.MessageTypeUser, "compact-me-please\\n")
-	var toolUseID string
-	for _, m := range listMessages(t, database, id) {
-		if m.SequenceID == toolUseSeq {
-			var msg llm.Message
-			if err := json.Unmarshal([]byte(*m.LlmData), &msg); err != nil {
-				t.Fatal(err)
-			}
-			toolUseID = msg.Content[len(msg.Content)-1].ID
-		}
-	}
 
 	// Invalid requests are rejected and record nothing.
 	chat("/compact-debug squish "+strconv.FormatInt(toolUseSeq, 10)+"-"+strconv.FormatInt(toolUseSeq, 10)+" x", http.StatusBadRequest)
 	chat("/compact-debug trim nope", http.StatusBadRequest)
+	chat("/compact-debug trim "+strconv.FormatInt(helloSeq, 10), http.StatusBadRequest) // no tool output
 	chat("/compact-debug squish nope", http.StatusBadRequest)
 
-	chat("/compact-debug trim "+toolUseID, http.StatusAccepted)
+	// Trim takes an id from the index: the call's.
+	chat("/compact-debug trim "+strconv.FormatInt(toolUseSeq, 10), http.StatusAccepted)
 	chat("/compact-debug squish "+strconv.FormatInt(helloSeq, 10)+"-"+strconv.FormatInt(hiSeq, 10)+" The user  said hello.", http.StatusAccepted)
 
 	var records []db.InPlaceCompaction
@@ -205,7 +197,7 @@ func TestCompactDebugEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	listing := listingData.Text
-	if want := `note "The user said hello."`; !strings.Contains(listing, want) || !strings.Contains(listing, "bash output (trimmed)") {
+	if want := `note "The user said hello."`; !strings.Contains(listing, want) || !strings.Contains(listing, `bash "echo compact-me-please" → trimmed`) {
 		t.Fatalf("listing %s missing %q", listing, want)
 	}
 
@@ -281,6 +273,22 @@ func compactGeneration(t *testing.T, h *TestHarness) []generated.Message {
 	return rows
 }
 
+// addContextNudge records a context nudge like recordContextNudge's.
+func addContextNudge(t *testing.T, h *TestHarness) {
+	t.Helper()
+	if _, err := h.db.CreateMessage(t.Context(), db.CreateMessageParams{
+		ConversationID: h.convID,
+		Type:           db.MessageTypeUser,
+		LLMData: llm.Message{Role: llm.MessageRoleUser, Content: []llm.Content{
+			{Type: llm.ContentTypeText, Text: "Context is 50k."},
+			{Type: llm.ContentTypeText, Text: "## Index NUDGE_INDEX"},
+		}},
+		UserData: map[string]any{"context_nudge": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func llmDataText(rows []generated.Message) string {
 	var b strings.Builder
 	for _, m := range rows {
@@ -294,6 +302,8 @@ func llmDataText(rows []generated.Message) string {
 // TestPiCompactionCarriesInPlaceCompactedTail: with a budget large enough to
 // keep everything, generation compaction copies the compacted view forward,
 // so the squish summary replaces the squished turn in the new generation.
+// Context nudges are left behind: their sizes and indexes are of the old
+// generation.
 func TestPiCompactionCarriesInPlaceCompactedTail(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -306,16 +316,19 @@ func TestPiCompactionCarriesInPlaceCompactedTail(t *testing.T) {
 		h.WaitResponse()
 		synctest.Wait()
 		squishFirstTurn(t, h.server, h.db, h.convID, "SQUISHED_ALPHA")
+		addContextNudge(t, h)
 
 		got := llmDataText(compactGeneration(t, h))
-		if !strings.Contains(got, "SQUISHED_ALPHA") || !strings.Contains(got, "BETA_TURN") || strings.Contains(got, "ALPHA_TURN") {
+		if !strings.Contains(got, "SQUISHED_ALPHA") || !strings.Contains(got, "BETA_TURN") || strings.Contains(got, "ALPHA_TURN") ||
+			strings.Contains(got, "NUDGE_INDEX") {
 			t.Fatalf("new generation should carry the compacted view:\n%s", got)
 		}
 	})
 }
 
 // TestPiCompactionSummarizesInPlaceCompactedView: when older history is
-// summarized, the summarizer sees the squish summary, not the squished turn.
+// summarized, the summarizer sees the squish summary, not the squished turn,
+// and not context nudges.
 func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -325,6 +338,7 @@ func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 		h.NewConversation("echo: ALPHA_TURN", "")
 		h.WaitResponse()
 		synctest.Wait()
+		addContextNudge(t, h)
 		h.Chat("echo: BETA_TURN")
 		h.WaitResponse()
 		synctest.Wait()
@@ -342,7 +356,8 @@ func TestPiCompactionSummarizesInPlaceCompactedView(t *testing.T) {
 				}
 			}
 		}
-		if !strings.Contains(prompt, "SQUISHED_ALPHA") || strings.Contains(prompt, "ALPHA_TURN") {
+		if !strings.Contains(prompt, "SQUISHED_ALPHA") || !strings.Contains(prompt, "BETA_TURN") || strings.Contains(prompt, "ALPHA_TURN") ||
+			strings.Contains(prompt, "NUDGE_INDEX") {
 			t.Fatalf("summarizer prompt should see the compacted view:\n%s", prompt)
 		}
 	})
