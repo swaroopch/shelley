@@ -1028,7 +1028,7 @@ func (s *Server) getOrCreateConversationManager(ctx context.Context, conversatio
 		manager := NewConversationManager(conversationID, s.db, s.logger, config, s.integrationSkills, recordMessage, recordTurnStart, onStateChange, s.streamPub)
 		manager.role = role
 		manager.onTurnStartRejected = func() { go manager.drainPendingMessages(s) }
-		manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) error {
+		manager.recordDrainedQueued = func(ctx context.Context, qm db.QueuedMessage, messages []llm.Message) (int64, error) {
 			return s.recordDrainedQueuedMessages(ctx, conversationID, qm, messages)
 		}
 		if role == roleTopLevel && conversation.ExternalEndpoint != nil {
@@ -1230,8 +1230,9 @@ func (s *Server) insertMessages(ctx context.Context, conversationID string, para
 // neither the rows nor the array change persists, so the item cannot be fed
 // twice. The first row removes the queued entry; the last row carries the
 // user provenance captured at queue time (drain runs on a background
-// context). Synthetic transcription audit rows stay unattributed.
-func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID string, qm db.QueuedMessage, messages []llm.Message) error {
+// context). Synthetic transcription audit rows stay unattributed. Returns
+// the user row's sequence ID for rendering its external wrapper to the LLM.
+func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID string, qm db.QueuedMessage, messages []llm.Message) (int64, error) {
 	paramsList := make([]db.CreateMessageParams, 0, len(messages))
 	for i, message := range messages {
 		var userDataArgs []interface{}
@@ -1240,7 +1241,7 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 		}
 		params, err := s.buildCreateMessageParams(conversationID, message, llm.Usage{}, nil, userDataArgs...)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if i == 0 {
 			params.RemoveQueuedID = qm.ID
@@ -1251,8 +1252,11 @@ func (s *Server) recordDrainedQueuedMessages(ctx context.Context, conversationID
 		}
 		paramsList = append(paramsList, params)
 	}
-	_, err := s.insertMessages(ctx, conversationID, paramsList)
-	return err
+	created, err := s.insertMessages(ctx, conversationID, paramsList)
+	if err != nil {
+		return 0, err
+	}
+	return created[len(created)-1].SequenceID, nil
 }
 
 // userEmailContextKey carries the authenticated exe.dev account (from the
@@ -1377,6 +1381,7 @@ func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs
 		if err != nil {
 			return err
 		}
+		params.ExternalMessageID = m.externalMessageID
 		paramsList = append(paramsList, params)
 	}
 	_, err := s.insertMessages(ctx, conversationID, paramsList)
@@ -1385,10 +1390,11 @@ func (s *Server) recordMessages(ctx context.Context, conversationID string, msgs
 
 // recordMessageInput is one message to record via recordMessages.
 type recordMessageInput struct {
-	message    llm.Message
-	usage      llm.Usage
-	otherUsage []llm.PurposedUsage
-	userData   []interface{}
+	message           llm.Message
+	usage             llm.Usage
+	otherUsage        []llm.PurposedUsage
+	userData          []interface{}
+	externalMessageID string
 }
 
 // getMessageType determines the message type from an LLM message
