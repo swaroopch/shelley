@@ -307,6 +307,11 @@ type ConversationOptions struct {
 	// the size of its context while the compact_in_place tool is enabled.
 	// Zero means the default (160k).
 	CompactNudgeTokens int `json:"compact_nudge_tokens,omitempty"`
+	// DisableCompactNudges keeps the agent from being told its context size
+	// even though compact_in_place is enabled. Set when the user enables the
+	// tool mid-conversation (the Compact in Place button): they asked for a
+	// compaction, not for an agent that watches its context.
+	DisableCompactNudges bool `json:"disable_compact_nudges,omitempty"`
 }
 
 // ParseConversationOptions parses a JSON string into ConversationOptions.
@@ -334,9 +339,12 @@ func (db *DB) UpdateConversationOptions(ctx context.Context, conversationID stri
 	})
 }
 
-// RegisterConversationHook atomically adds hook to conversation options if absent.
-func (db *DB) RegisterConversationHook(ctx context.Context, conversationID string, hook ConversationHook) (ConversationOptions, error) {
+// ModifyConversationOptions atomically applies modify to a conversation's
+// stored options, writing them back if modify reports a change. It returns the
+// resulting options and whether they changed.
+func (db *DB) ModifyConversationOptions(ctx context.Context, conversationID string, modify func(*ConversationOptions) bool) (ConversationOptions, bool, error) {
 	var opts ConversationOptions
+	var changed bool
 	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
 		q := generated.New(tx.Conn())
 		raw, err := q.GetConversationOptions(ctx, conversationID)
@@ -344,12 +352,9 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 			return err
 		}
 		opts = ParseConversationOptions(raw)
-		for _, existing := range opts.EndOfTurnHooks {
-			if existing.URL == hook.URL {
-				return nil
-			}
+		if changed = modify(&opts); !changed {
+			return nil
 		}
-		opts.EndOfTurnHooks = append(append([]ConversationHook(nil), opts.EndOfTurnHooks...), hook)
 		optsJSON, err := json.Marshal(opts)
 		if err != nil {
 			return fmt.Errorf("failed to marshal conversation options: %w", err)
@@ -359,6 +364,20 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 			ConversationOptions: string(optsJSON),
 		})
 	})
+	return opts, changed, err
+}
+
+// RegisterConversationHook atomically adds hook to conversation options if absent.
+func (db *DB) RegisterConversationHook(ctx context.Context, conversationID string, hook ConversationHook) (ConversationOptions, error) {
+	opts, _, err := db.ModifyConversationOptions(ctx, conversationID, func(o *ConversationOptions) bool {
+		for _, existing := range o.EndOfTurnHooks {
+			if existing.URL == hook.URL {
+				return false
+			}
+		}
+		o.EndOfTurnHooks = append(append([]ConversationHook(nil), o.EndOfTurnHooks...), hook)
+		return true
+	})
 	return opts, err
 }
 
@@ -367,26 +386,12 @@ func (db *DB) RegisterConversationHook(ctx context.Context, conversationID strin
 // returns the resulting options. reasoning is a user-facing level name
 // ("off", "minimal", "low", "medium", "high", "xhigh").
 func (db *DB) SetConversationThinkingLevel(ctx context.Context, conversationID, reasoning string) (ConversationOptions, error) {
-	var opts ConversationOptions
-	err := db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
-		q := generated.New(tx.Conn())
-		raw, err := q.GetConversationOptions(ctx, conversationID)
-		if err != nil {
-			return err
+	opts, _, err := db.ModifyConversationOptions(ctx, conversationID, func(o *ConversationOptions) bool {
+		if o.ThinkingLevel == reasoning {
+			return false
 		}
-		opts = ParseConversationOptions(raw)
-		if opts.ThinkingLevel == reasoning {
-			return nil
-		}
-		opts.ThinkingLevel = reasoning
-		optsJSON, err := json.Marshal(opts)
-		if err != nil {
-			return fmt.Errorf("failed to marshal conversation options: %w", err)
-		}
-		return q.UpdateConversationOptions(ctx, generated.UpdateConversationOptionsParams{
-			ConversationID:      conversationID,
-			ConversationOptions: string(optsJSON),
-		})
+		o.ThinkingLevel = reasoning
+		return true
 	})
 	return opts, err
 }
@@ -411,6 +416,32 @@ func (db *DB) CreateConversation(ctx context.Context, slug *string, userInitiate
 			Cwd:                 cwd,
 			Model:               model,
 			ConversationOptions: string(optsJSON),
+		})
+		return err
+	})
+	return &conversation, err
+}
+
+// CreateChannelConversation creates the conversation for an external chat:
+// externalID is the channel's chat id, endpoint the base URL its replies
+// are sent to, and opts its options.
+func (db *DB) CreateChannelConversation(ctx context.Context, externalID, endpoint, model string, opts ConversationOptions) (*generated.Conversation, error) {
+	conversationID, err := GenerateConversationID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate conversation ID: %w", err)
+	}
+	optsJSON, err := json.Marshal(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal conversation options: %w", err)
+	}
+	var conversation generated.Conversation
+	err = db.pool.Tx(ctx, func(ctx context.Context, tx *Tx) error {
+		conversation, err = generated.New(tx.Conn()).CreateChannelConversation(ctx, generated.CreateChannelConversationParams{
+			ConversationID:         conversationID,
+			Model:                  &model,
+			ConversationOptions:    string(optsJSON),
+			ExternalConversationID: &externalID,
+			ExternalEndpoint:       &endpoint,
 		})
 		return err
 	})
@@ -594,10 +625,14 @@ type QueuedMessage struct {
 	// UserData is message provenance and other presentation metadata captured at
 	// queue time. It is copied to messages.user_data when the item drains.
 	UserData json.RawMessage `json:"user_data,omitempty"`
+	// ExternalMessageID is the channel's id for a message that arrived from
+	// an external chat; it is stamped onto the messages row on drain.
+	ExternalMessageID string `json:"external_message_id,omitempty"`
 	// Inject lets a running turn take the message at its next LLM round
 	// instead of waiting for the turn to end.
 	Inject bool `json:"inject,omitempty"`
-	// ID, CreatedAt, Model, UserEmail, and UserData are shared queue metadata.
+	// ID, CreatedAt, Model, UserEmail, UserData, and ExternalMessageID are
+	// shared queue metadata.
 	// Kind, State, Transcription, Error, and the optional ready Llm payload form
 	// the specialized-work variant.
 	Kind          QueuedMessageKind    `json:"kind,omitempty"`
@@ -1650,7 +1685,8 @@ const (
 	MessageTypeGitInfo MessageType = "gitinfo" // user-visible only, not sent to LLM
 	MessageTypeWarning MessageType = "warning" // user-visible only, not sent to LLM
 	// MessageTypeModelChange marks where the conversation switched models via
-	// the /model command. User-visible only, never sent to the LLM.
+	// the /model command, or otherwise changed what its loop is built with (a
+	// tool enabled mid-conversation). User-visible only, never sent to the LLM.
 	MessageTypeModelChange MessageType = "modelchange"
 	// MessageTypeSlug records the LLM call that generated the conversation's
 	// slug. Rendered as nothing and never sent to the LLM: it exists only to
@@ -1686,7 +1722,10 @@ type CreateMessageParams struct {
 	// HTTPS proxy stamps) that authored a user message. Empty strings are
 	// stored as NULL: only user messages carry it, and requests without the
 	// header (direct/local access) leave it unset.
-	UserEmail           string
+	UserEmail string
+	// ExternalMessageID is the channel's id for a user message that arrived
+	// from an external chat. Empty strings are stored as NULL.
+	ExternalMessageID   string
 	DisplayData         interface{} // Will be JSON marshalled, tool-specific display content
 	ExcludedFromContext bool        // If true, message is stored but not sent to LLM
 	// OtherUsageData is the usage of indirect LLM calls affiliated with this
@@ -1823,6 +1862,7 @@ func insertMessageTx(ctx context.Context, q *generated.Queries, params CreateMes
 		ModelName:           nullableString(params.ModelName),
 		UserEmail:           nullableString(params.UserEmail),
 		OtherUsageData:      otherUsageDataJSON,
+		ExternalMessageID:   nullableString(params.ExternalMessageID),
 		CreatedAt:           sqliteTimeArg(params.CreatedAt),
 	})
 	if err != nil {
