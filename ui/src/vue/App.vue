@@ -35,6 +35,7 @@
         :current-conversation-id="currentConversationId"
         :viewed-conversation="viewedConversation"
         :show-active-trigger="showActiveTrigger"
+        :message-sent-trigger="messageSentTrigger"
         @close="drawerOpen = false"
         @toggle-collapse="toggleDrawerCollapsed"
         @select-conversation="selectConversation"
@@ -58,6 +59,7 @@
           :on-archive-conversation="archiveFromChat"
           :current-conversation="currentConversation"
           :on-conversation-update="updateConversation"
+          :on-message-sent="handleMessageSent"
           :on-first-message="handleFirstMessage"
           :on-draft-created="onDraftCreated"
           :on-distill-new-generation="handleDistillNewGeneration"
@@ -277,7 +279,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, watch, shallowRef } from "vue";
 import ChatInterface from "./components/ChatInterface.vue";
 import type { RecordingMode } from "./components/recordingDestination";
 import { isImeComposing } from "../utils/imeComposing";
@@ -383,7 +385,8 @@ function updatePageTitle(conversation: Conversation | undefined) {
 const banner = window.__SHELLEY_INIT__?.banner;
 
 // ---- state ----
-const conversations = ref<ConversationWithState[]>([]);
+// Patches replace the list (and only the rows they touch), so deep reactivity is unnecessary.
+const conversations = shallowRef<ConversationWithState[]>([]);
 const currentConversationId = ref<string | null>(null);
 // Subagent tool widgets (SubagentTool.vue) join their slug against the live
 // conversation list to show what the subagent is doing right now.
@@ -448,6 +451,7 @@ function applyDiskSpaceStatus(status: DiskSpaceStatus, snapshot = false) {
 }
 const reconnectNonce = ref(0);
 const showActiveTrigger = ref(0);
+const messageSentTrigger = ref(0);
 
 // ---- non-reactive refs ----
 let initialSlugResolved = false;
@@ -722,6 +726,10 @@ function updateConversation(updatedConversation: Conversation) {
   }
 }
 
+function handleMessageSent(conversationId: string) {
+  if (conversationId === currentConversationId.value) messageSentTrigger.value++;
+}
+
 function handleConversationArchived(
   conversationId: string,
   nextConversation?: Conversation | null,
@@ -827,6 +835,7 @@ async function handleFirstMessage(
     const newConversationId = response.conversation_id;
     messageStore.setAgentWorking(newConversationId, true);
     currentConversationId.value = newConversationId;
+    handleMessageSent(newConversationId);
   } catch (err) {
     console.error("Failed to send first message:", err);
     error.value = err instanceof Error ? err.message : "Failed to send message";
