@@ -760,7 +760,7 @@ watch(isSmallScreen, (small) => {
 
 const placeholderText = computed(() => {
   if (hint.value.id !== "default" && hint.value.text) return hint.value.text;
-  return isSmallScreen.value ? t("messagePlaceholderShort") : t("messagePlaceholder");
+  return t("messagePlaceholder");
 });
 
 function handleResize() {
