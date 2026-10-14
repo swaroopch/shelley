@@ -1,10 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createConversationViaAPI } from "./helpers";
 
-// Mod+Shift+Enter (⌘⇧↵ on mac, Ctrl+Shift+Enter elsewhere) queues the composed
-// message to run after the current turn instead of interrupting it, and falls
-// back to an ordinary send when the agent is idle. Playwright reports a Linux
-// platform, so the mod is Ctrl.
+// Alt+Enter (⌥↵ on mac) queues the composed message to run after the current
+// turn instead of interrupting it, and falls back to an ordinary send when the
+// agent is idle. Playwright reports a Linux platform, so the mod is Ctrl.
 
 async function openConversation(
   page: Page,
@@ -28,31 +27,33 @@ async function sendAndWaitForWorking(page: Page, text: string) {
 test.describe("queue-shortcut", () => {
   test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false });
 
-  test("Ctrl+Shift+Enter queues the composed message", async ({ page, request }) => {
+  test("Alt+Enter queues the composed message", async ({ page, request }) => {
     const messageInput = await openConversation(page, request);
     await sendAndWaitForWorking(page, "delay: 60");
 
-    await messageInput.fill("queued via shortcut");
+    // The rebind replaced Mod+Shift+Enter: it must no longer queue.
+    await messageInput.fill("not queued");
     await messageInput.press("Control+Shift+Enter");
+    await expect(messageInput).toHaveValue(/not queued/);
+    await expect(page.getByTestId("queued-badge")).toHaveCount(0);
+
+    await messageInput.fill("queued via shortcut");
+    await messageInput.press("Alt+Enter");
 
     await expect(messageInput).toHaveValue("");
     await expect(page.getByTestId("queued-badge")).toHaveCount(1, { timeout: 10000 });
     await expect(page.locator("text=queued via shortcut")).toHaveCount(1);
   });
 
-  test("holding Ctrl+Shift previews queueing on the send button", async ({ page, request }) => {
+  test("holding Alt previews queueing on the send button", async ({ page, request }) => {
     const messageInput = await openConversation(page, request);
     await sendAndWaitForWorking(page, "delay: 60");
     await messageInput.fill("hold to preview");
 
     const sendButton = page.getByTestId("send-button");
-    await page.keyboard.down("Control");
-    await expect(sendButton).toHaveAttribute("aria-label", "Compact and send");
-    await page.keyboard.down("Shift");
+    await page.keyboard.down("Alt");
     await expect(sendButton).toHaveAttribute("aria-label", "Queue after agent finishes");
-    await page.keyboard.up("Shift");
-    await expect(sendButton).toHaveAttribute("aria-label", "Compact and send");
-    await page.keyboard.up("Control");
+    await page.keyboard.up("Alt");
     await expect(sendButton).toHaveAttribute("aria-label", "Send message");
   });
 
@@ -68,11 +69,11 @@ test.describe("queue-shortcut", () => {
     await expect(page.getByTestId("queued-badge")).toHaveCount(0);
   });
 
-  test("Ctrl+Shift+Enter sends when the agent is idle", async ({ page, request }) => {
+  test("Alt+Enter sends when the agent is idle", async ({ page, request }) => {
     const messageInput = await openConversation(page, request);
 
     await messageInput.fill("sent via shortcut");
-    await messageInput.press("Control+Shift+Enter");
+    await messageInput.press("Alt+Enter");
 
     await expect(messageInput).toHaveValue("");
     await expect(page.locator("text=sent via shortcut")).toHaveCount(1);

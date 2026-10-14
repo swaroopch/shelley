@@ -8,21 +8,32 @@ shortcut. Shift+Enter alone was rejected as the binding because it is the
 composer's newline: taking it would break multi-paragraph drafting exactly when
 a long queued message is likely.
 
-Binding: **Mod+Shift+Enter** (⌘⇧↵ on mac, Ctrl+Shift+Enter elsewhere) queues
-the composed message, pairing with the existing Mod+Enter = compact-and-send.
-It falls back to an ordinary send while the agent is idle, since there is
-nothing to wait for then (that is what the button's plain arrow already
-promises). Holding the mods previews the queue clock icon and "Queue after
-agent finishes" on the send button; mod+shift+click on Send does the same as
-the key. Shift+Enter alone keeps its newline. Discoverability comes from the
-`kbd` hint on the dropdown row.
+Binding: **Alt+Enter** (⌥↵ on mac) queues the composed message, pairing with
+the existing Mod+Enter = compact-and-send. It falls back to an ordinary send
+while the agent is idle, since there is nothing to wait for then (that is what
+the button's plain arrow already promises). Holding Alt previews the queue
+clock icon and "Queue after agent finishes" on the send button; alt+click on
+Send does the same as the key. Shift+Enter alone keeps its newline.
+Discoverability comes from the `kbd` hint on the dropdown row.
+
+First shipped as Mod+Shift+Enter (commit `5edcf6e6`), rebound to Alt+Enter the
+same day: three keys beat two, and Alt+Enter is free — measured in Chromium and
+Firefox, the browser's default action for Alt+Enter in a textarea is nothing,
+so the binding costs no native behavior. `isAltEvent` requires bare Alt, so
+AltGr (Ctrl+Alt) layouts and Cmd/Ctrl combinations keep their existing meanings
+(`AltGraph` is never needed as a separate guard because AltGr always reports
+Ctrl+Alt). Alt+Enter previously fell through the composer's Enter branch to an
+undocumented "send", so nothing advertised is lost. Residual risk not testable
+on this Linux VM: Firefox on Windows/Linux uses Alt for its menu bar, and
+remote-desktop clients sometimes intercept Alt; WebKit could not be launched
+here (Playwright's WebKit needs ~20 missing GTK/GStreamer libraries).
 
 Source of truth: `ui/src/vue/components/MessageInput.vue` (keydown handler,
 `handleSendClick`, send-button preview, menu hint) and
 `ui/e2e/queue-shortcut.spec.ts`, registered in `.shelley-browser-tests` so the
 sync gate exercises it. Rebuild with `make build-custom` to restore it; revert
-by dropping this commit. If upstream ever binds Mod+Shift+Enter in the
-composer, keep upstream's meaning and move this shortcut.
+by dropping these commits. If upstream ever binds Alt+Enter in the composer,
+keep upstream's meaning and move this shortcut.
 
 ## Manual upstream upgrade (2026-10-03)
 

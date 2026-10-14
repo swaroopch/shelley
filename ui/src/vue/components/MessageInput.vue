@@ -1148,35 +1148,39 @@ const preferCompactAndSend = computed(
 );
 
 // Mod+Enter (⌘ on mac, Ctrl elsewhere) and mod+click on Send both compact and
-// send; Mod+Shift+Enter (⌘⇧↵ / Ctrl+Shift+Enter) queues the message to run
-// after the current turn instead of interrupting it, falling back to an
-// ordinary send while the agent is idle (nothing to wait for). Shift+Enter
-// alone keeps its newline. While the mods are held the send button previews
-// what it will do, so track them from every key event's modifier state (not
-// e.key: Meta keyup reports metaKey=false already, and the mod may be released
-// while another key has focus).
+// send; Alt+Enter (⌥↵ / Alt+Enter) queues the message to run after the current
+// turn instead of interrupting it, falling back to an ordinary send while the
+// agent is idle (nothing to wait for). Shift+Enter alone keeps its newline.
+// While a modifier is held the send button previews what it will do, so track
+// them from every key event's modifier state (not e.key: Meta keyup reports
+// metaKey=false already, and the mod may be released while another key has
+// focus).
 const modHeld = ref(false);
-const modShiftHeld = ref(false);
+const altHeld = ref(false);
 const compactSendShortcut = isMac ? "\u2318\u21a9" : "Ctrl+Enter";
-const queueShortcut = isMac ? "\u2318\u21e7\u21a9" : "Ctrl+Shift+Enter";
+const queueShortcut = isMac ? "\u2325\u21a9" : "Alt+Enter";
 function isModEvent(e: KeyboardEvent | MouseEvent) {
   return e.metaKey || e.ctrlKey;
 }
+// Bare Alt: AltGr reports as Ctrl+Alt on Windows/Linux layouts, and Cmd/Ctrl
+// combinations keep their existing meanings.
+function isAltEvent(e: KeyboardEvent | MouseEvent) {
+  return e.altKey && !e.ctrlKey && !e.metaKey;
+}
 function trackMod(e: KeyboardEvent) {
   modHeld.value = isModEvent(e);
-  modShiftHeld.value = isModEvent(e) && e.shiftKey;
+  altHeld.value = isAltEvent(e);
 }
 function clearMod() {
   modHeld.value = false;
-  modShiftHeld.value = false;
+  altHeld.value = false;
 }
 const canQueueNow = computed(() => props.canQueue && hasQueueHandler.value);
-// What the send button will do right now: threshold-driven, or mod-held.
-const queueArmed = computed(() => modShiftHeld.value && canQueueNow.value);
+// What the send button will do right now: threshold-driven, or modifier-held.
+const queueArmed = computed(() => altHeld.value && canQueueNow.value);
 const compactSendArmed = computed(
   () =>
-    preferCompactAndSend.value ||
-    (modHeld.value && !modShiftHeld.value && canCompactAndSend.value),
+    preferCompactAndSend.value || (modHeld.value && !altHeld.value && canCompactAndSend.value),
 );
 
 // --- @ filename autocomplete --------------------------------------------
@@ -1512,17 +1516,18 @@ watch([composerSession, () => props.compactSendLevel], () => {
   sendSelectedLevel.value = "";
 });
 
-// Mod+click on the send button compacts and sends; the form submit event
-// carries no modifier state, so intercept the click.
+// Alt+click on the send button queues, mirroring Alt+Enter; mod+click compacts
+// and sends. The form submit event carries no modifier state, so intercept the
+// click.
 function handleSendClick(e: MouseEvent) {
-  if (!isModEvent(e) || !canSubmit.value) return;
-  if (e.shiftKey) {
+  if (!canSubmit.value) return;
+  if (isAltEvent(e)) {
     if (!canQueueNow.value) return;
     e.preventDefault();
     void handleQueueMessage();
     return;
   }
-  if (!canCompactAndSend.value) return;
+  if (!isModEvent(e) || !canCompactAndSend.value) return;
   e.preventDefault();
   void handleCompactAndSend();
 }
@@ -1801,11 +1806,11 @@ function handleKeyDown(e: KeyboardEvent) {
     textareaRef.value?.blur();
     return;
   }
-  // Mod+Shift+Enter queues the composed message for after the current turn.
-  // Queueing only exists while the agent is working, so this falls back to an
-  // ordinary send when nothing is running — the same thing the send button's
-  // plain arrow promises in that state.
-  if (e.key === "Enter" && e.shiftKey && isModEvent(e)) {
+  // Alt+Enter queues the composed message for after the current turn. Queueing
+  // only exists while the agent is working, so this falls back to an ordinary
+  // send when nothing is running — the same thing the send button's plain arrow
+  // promises in that state.
+  if (e.key === "Enter" && isAltEvent(e)) {
     e.preventDefault();
     if (canQueueNow.value) void handleQueueMessage();
     else void handleSubmit(e);
