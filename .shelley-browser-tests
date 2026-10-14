@@ -3,3 +3,4 @@
 e2e/skills-picker.spec.ts
 e2e/mobile-keyboard-input.spec.ts
 e2e/message-input-alignment.spec.ts
+e2e/queue-shortcut.spec.ts

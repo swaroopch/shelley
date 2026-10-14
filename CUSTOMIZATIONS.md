@@ -1,5 +1,29 @@
 # This fork's customization workflow
 
+## Queue keyboard shortcut (2026-10-14)
+
+Fork-only, on `custom`; not proposed upstream. The composer's "Queue after
+agent finishes" action was dropdown-only, and the owner asked for a keyboard
+shortcut. Shift+Enter alone was rejected as the binding because it is the
+composer's newline: taking it would break multi-paragraph drafting exactly when
+a long queued message is likely.
+
+Binding: **Mod+Shift+Enter** (⌘⇧↵ on mac, Ctrl+Shift+Enter elsewhere) queues
+the composed message, pairing with the existing Mod+Enter = compact-and-send.
+It falls back to an ordinary send while the agent is idle, since there is
+nothing to wait for then (that is what the button's plain arrow already
+promises). Holding the mods previews the queue clock icon and "Queue after
+agent finishes" on the send button; mod+shift+click on Send does the same as
+the key. Shift+Enter alone keeps its newline. Discoverability comes from the
+`kbd` hint on the dropdown row.
+
+Source of truth: `ui/src/vue/components/MessageInput.vue` (keydown handler,
+`handleSendClick`, send-button preview, menu hint) and
+`ui/e2e/queue-shortcut.spec.ts`, registered in `.shelley-browser-tests` so the
+sync gate exercises it. Rebuild with `make build-custom` to restore it; revert
+by dropping this commit. If upstream ever binds Mod+Shift+Enter in the
+composer, keep upstream's meaning and move this shortcut.
+
 ## Manual upstream upgrade (2026-10-03)
 
 The owner approved the merge-based upgrade instead of the generic skill's
