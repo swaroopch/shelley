@@ -35,6 +35,26 @@ sync gate exercises it. Rebuild with `make build-custom` to restore it; revert
 by dropping these commits. If upstream ever binds Alt+Enter in the composer,
 keep upstream's meaning and move this shortcut.
 
+### Upstream PR #314 (2026-10-14)
+
+Opened against `boldsoftware/shelley:main` from the owner's GitHub account:
+<https://github.com/boldsoftware/shelley/pull/314>. Branch `queue-shortcut` at
+`2240516f`, one focused commit off upstream `f611a3eb`, containing only
+`ui/src/vue/components/MessageInput.vue` and `ui/e2e/queue-shortcut.spec.ts`;
+the description draft is `QUEUE_SHORTCUT_PR.md`. The feature stays committed
+directly on `custom` too, so `.shelley-features` deliberately does **not** list
+the branch: merging it would add the same lines twice and fail the sync
+validator, which refuses publication and preserves the last working build. If
+upstream lands the change, resolve adoption as a deliberate integration review
+that drops the fork's two commits rather than merging both. CLA acceptance and
+maintainer approval are separate from publication; nothing here deploys.
+
+Validated in the feature worktree (`/tmp/shelley-queue-shortcut`, not the
+canonical checkout): both UI type checks, lint, 83 UI unit-test files, `make
+build`, and the new spec in Chromium and Firefox. The rebind commit `2116f816`
+is deployed and user-visible on this VM; this PR is source publication only and
+deploys nothing.
+
 ## Manual upstream upgrade (2026-10-03)
 
 The owner approved the merge-based upgrade instead of the generic skill's
