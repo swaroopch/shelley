@@ -556,6 +556,54 @@ Sources: [exe.dev customization](https://exe.dev/docs/customization.md),
 [new VM options](https://exe.dev/docs/cli-new.md), and the
 [exeuntu setup service](https://github.com/boldsoftware/exeuntu/blob/main/exe-setup.service).
 
+### Prebuilt binary (2026-10-15)
+
+Building on every new VM took about 3 minutes. CI now builds once per push to
+`custom` and new VMs download the result; the account loader and
+`--first-boot` call are unchanged.
+
+- `.github/workflows/custom-prebuilt.yml` runs on every push to `custom`
+  (including the sync timer's merges) on `ubuntu-24.04` (the exeuntu base,
+  since the cgo build links glibc). It repeats the provisioner's source path
+  in order: official `origin` plus `fork` remotes, Go from `go.mod`, Node 24,
+  pnpm pinned by `ui/package.json` installed with npm, UI install, both type
+  checks, lint, UI unit tests, `make build-custom`, `go test ./server -parallel
+  1`, clean-tree and `shelley version` checks. It also runs
+  `scripts/test-provision-exe-vm.py`.
+- Only when all of that passes, it uploads `shelley-linux-amd64-<commit>` and
+  then `shelley-linux-amd64-<commit>.sha256` to the prerelease
+  [`custom-prebuilt`](https://github.com/swaroopch/shelley/releases/tag/custom-prebuilt).
+  That tag was created once and never moves; only assets change. The newest 10
+  builds are kept (checksums are pruned before their binaries). It needs only
+  the default `GITHUB_TOKEN`.
+- `provision-exe-vm.sh --first-boot` still clones the canonical checkout, then
+  walks up to 20 first-parent commits of `fork/custom` looking for a published
+  checksum. The checksum goes up last, so a missing one means "no build yet"
+  and a half-uploaded binary fails verification. It downloads the binary,
+  checks SHA-256, requires `shelley version` to report `customized` at that
+  commit, and then uses the same backup and atomic install as before. If the
+  newest build is an older commit (CI still running or failed on the latest
+  merge), the canonical checkout is reset to that commit so the source matches
+  the binary. `custom` still tracks `fork/custom`.
+- Any failure (no build in range, network, checksum, version) falls back to the
+  original build-and-test path unchanged. `SHELLEY_PREBUILT=0` forces that path
+  and `SHELLEY_PREBUILT_URL` overrides the release download base (for tests).
+  The `success` marker records `source=prebuilt` or `source=source`.
+- The prebuilt path does not install the managed Node/pnpm or write
+  `tools.env`. Install Node 24 before building by hand; the Makefile fetches
+  the pinned pnpm through `npx`.
+- The checksum guards against corrupt or partial downloads, not against a
+  compromised repository. Write access to `custom` and its releases controls
+  new VMs, just as it already did through the downloaded installer.
+- If CI fails on a merge, nothing is published for that commit. New VMs get
+  the previous good build until a later push passes. Once 20 consecutive
+  first-parent commits lack a build, they build from source, which is no worse
+  than before. Re-run the failed workflow from the Actions tab; re-runs for an
+  already-published commit are no-ops.
+- The upstream `Test`, `Release` and `Publish Version Metadata` workflows are
+  disabled on the fork (a repository setting, not a file change), so the
+  sync's `main` mirror pushes never run upstream's release pipeline here.
+
 ## Automatic integration (VM-side, not GitHub Actions)
 
 The VM user timer is deliberate: the connected exe.dev repository integration

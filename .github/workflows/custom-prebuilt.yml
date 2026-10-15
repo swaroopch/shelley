@@ -1,0 +1,153 @@
+# Fork-only: build, test and publish the custom Shelley binary that new exe.dev
+# VMs install at first boot (scripts/provision-exe-vm.sh). It mirrors the
+# provisioner's source path step for step, so a published binary is exactly
+# what a VM would otherwise build and test itself. See CUSTOMIZATIONS.md.
+name: Custom prebuilt
+
+on:
+  push:
+    branches:
+      - custom
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publisher at a time. A newer push replaces a queued (not running) one,
+# so bursts of merges build only the newest pending commit.
+concurrency:
+  group: custom-prebuilt
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: custom-prebuilt
+  ASSET: shelley-linux-amd64
+  KEEP_BUILDS: 10
+  GOTOOLCHAIN: auto
+  CI: 'true'
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  build:
+    if: github.repository == 'swaroopch/shelley' && github.ref == 'refs/heads/custom'
+    # exe.dev VMs run Ubuntu 24.04 on amd64; the cgo build links against its glibc.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout custom
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Match the provisioner's remotes (origin = official Shelley)
+        run: |
+          # build-custom stamps the release tag at the merge-base with origin/main.
+          git remote rename origin fork
+          git remote add origin https://github.com/boldsoftware/shelley.git
+          git fetch --quiet origin --tags
+          git fetch --quiet fork
+          echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install pinned pnpm (ui/package.json packageManager)
+        run: |
+          pm="$(node -p 'require("./ui/package.json").packageManager')"
+          [[ "$pm" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unsupported packageManager: $pm" >&2; exit 1; }
+          npm --prefix "$RUNNER_TEMP/pnpm" install --no-audit --no-fund "$pm"
+          echo "$RUNNER_TEMP/pnpm/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Install tmux and set a test git identity
+        run: |
+          command -v tmux >/dev/null || { sudo apt-get update && sudo apt-get install -y tmux; }
+          git config --global user.name 'CI'
+          git config --global user.email 'ci@example.invalid'
+
+      - name: Tool versions
+        run: |
+          echo "Node: $(node --version); pnpm: $(pnpm --version); Go: $(go version)"
+
+      - name: Provisioning script tests
+        run: python3 scripts/test-provision-exe-vm.py
+
+      # The following steps are the provisioner's source path, in order.
+      - name: UI install, type checks, lint and unit tests
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run type-check
+          pnpm run type-check:vue
+          pnpm run lint
+          pnpm test
+
+      - name: make build-custom
+        run: make build-custom
+
+      - name: Server tests
+        run: go test ./server -parallel 1
+
+      - name: Verify clean tree and customized binary
+        run: |
+          git diff --quiet
+          git diff --cached --quiet
+          [[ "$(git rev-parse HEAD)" == "$COMMIT" ]]
+          bin/shelley version
+          bin/shelley version | jq -e --arg commit "$COMMIT" \
+            '.customized == true and .commit == $commit' >/dev/null
+          file bin/shelley
+
+      - name: Publish binary, then checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          name="$ASSET-$COMMIT"
+          mkdir -p dist
+          cp bin/shelley "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256")
+          cat "dist/$name.sha256"
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # The tag is created once and never moved; only assets change.
+            gh release create "$RELEASE_TAG" --target "$COMMIT" --prerelease --latest=false \
+              --title 'Custom Shelley prebuilt binaries' \
+              --notes 'CI-built and tested linux/amd64 binaries of the custom branch, one per commit (shelley-linux-amd64-COMMIT plus .sha256). Installed by scripts/provision-exe-vm.sh on new exe.dev VMs. Only the newest few builds are kept.'
+          fi
+
+          assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          if grep -qxF "$name.sha256" <<<"$assets"; then
+            echo "Already published: $name (re-run); leaving it untouched"
+            exit 0
+          fi
+          # Readers require the checksum, so a binary without one is never used.
+          # Upload the binary first and the checksum last.
+          gh release upload "$RELEASE_TAG" "dist/$name" --clobber
+          gh release upload "$RELEASE_TAG" "dist/$name.sha256"
+          echo "Published $name"
+
+      - name: Prune old builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          release_id="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq .id)"
+          gh api --paginate "repos/$GH_REPO/releases/$release_id/assets?per_page=100" \
+            --jq '.[] | [.created_at, .id, .name] | @tsv' > "$RUNNER_TEMP/assets.tsv"
+          # Newest binaries first; keep KEEP_BUILDS of them.
+          grep -v '\.sha256$' "$RUNNER_TEMP/assets.tsv" | sort -r | tail -n +"$((KEEP_BUILDS + 1))" |
+          while IFS=$'\t' read -r _ id name; do
+            # Delete the checksum first so readers never see a checksum without its binary.
+            sum_id="$(awk -F'\t' -v n="$name.sha256" '$3 == n { print $2 }' "$RUNNER_TEMP/assets.tsv")"
+            [[ -z "$sum_id" ]] || gh api -X DELETE "repos/$GH_REPO/releases/assets/$sum_id"
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$id"
+            echo "Pruned $name"
+          done

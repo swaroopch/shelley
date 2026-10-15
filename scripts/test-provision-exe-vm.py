@@ -12,6 +12,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROVISION = ROOT / "scripts/provision-exe-vm.sh"
 LOADER = ROOT / "scripts/exe-first-boot.sh"
 HASH = "0123456789abcdef0123456789abcdef01234567"
+PARENT = "89abcdef0123456789abcdef0123456789abcdef"
+RELEASE = "https://github.com/swaroopch/shelley/releases/download/custom-prebuilt"
 
 MOCK = r'''#!/usr/bin/env bash
 set -euo pipefail
@@ -22,6 +24,9 @@ printf '\n' >> "$MOCK_LOG"
 case "$name" in
   id)
     [[ "${1:-}" == -u ]] && { echo 1000; exit; }
+    ;;
+  uname)
+    echo x86_64
     ;;
   node)
     if [[ "${1:-}" == --version ]]; then echo v24.18.0
@@ -50,7 +55,12 @@ PNPM
       printf '{"packageManager":"pnpm@10.34.0"}\n' > "$dest/ui/package.json"
     elif [[ "$*" == *' diff --quiet'* || "$*" == *' diff --cached --quiet'* ]]; then
       exit "${MOCK_GIT_DIRTY:-0}"
+    elif [[ "$*" == *' rev-list '* ]]; then
+      printf '%s\n' "$MOCK_HASH" "$MOCK_PARENT"
     elif [[ "$*" == *'rev-parse'* ]]; then
+      if [[ "$*" == *' rev-parse HEAD' && -f "$MOCK_RESET" ]]; then
+        cat "$MOCK_RESET"; exit
+      fi
       if [[ "${@: -1}" == HEAD && "${MOCK_HEAD_CHANGE:-0}" == 1 ]]; then
         count=0
         [[ ! -f "$MOCK_HEAD_COUNT" ]] || count="$(cat "$MOCK_HEAD_COUNT")"
@@ -59,6 +69,8 @@ PNPM
         if ((count > 1)); then printf 'f%.0s' {1..40}; echo; exit; fi
       fi
       echo "$MOCK_HASH"
+    elif [[ "$*" == *' reset '* ]]; then
+      echo "${@: -1}" > "$MOCK_RESET"
     fi
     ;;
   make)
@@ -86,10 +98,27 @@ BINARY
     ;;
   curl)
     output=''
+    url="${@: -1}"
     while (($#)); do
       [[ "$1" == --output ]] && { output="$2"; shift 2; continue; }
       shift
     done
+    if [[ "$url" == */releases/download/* ]]; then
+      # MOCK_PREBUILT: missing (default), ok, bad (checksum mismatch).
+      want="shelley-linux-amd64-${MOCK_PREBUILT_COMMIT:-$MOCK_HASH}"
+      file="${url##*/}"
+      [[ "${MOCK_PREBUILT:-missing}" != missing ]] || exit 22
+      [[ "$file" == "$want" || "$file" == "$want.sha256" ]] || exit 22
+      body="$(printf '#!/usr/bin/env bash\nprintf %s\n' "'{\"customized\":true,\"commit\":\"${MOCK_PREBUILT_COMMIT:-$MOCK_HASH}\"}'")"
+      if [[ "$file" == *.sha256 ]]; then
+        sum="$(printf '%s\n' "$body" | sha256sum | cut -d' ' -f1)"
+        [[ "$MOCK_PREBUILT" != bad ]] || sum="$(printf '0%.0s' {1..64})"
+        printf '%s  %s\n' "$sum" "$want" > "$output"
+      else
+        printf '%s\n' "$body" > "$output"
+      fi
+      exit 0
+    fi
     if [[ -n "$output" ]]; then
       printf '#!/usr/bin/env bash\ntouch "$BODY_MARKER"\n' > "$output"
     fi
@@ -113,7 +142,7 @@ class ProvisionTests(unittest.TestCase):
         dispatcher.chmod(0o755)
         for name in (
             "curl", "git", "go", "id", "jq", "make", "node", "npm",
-            "sudo", "systemctl", "tmux", "uv", "uvx",
+            "sudo", "systemctl", "tmux", "uname", "uv", "uvx",
         ):
             (self.bin / name).symlink_to(dispatcher)
         self.log = self.base / "commands.log"
@@ -123,6 +152,8 @@ class ProvisionTests(unittest.TestCase):
             "HOME": str(self.home),
             "MOCK_HEAD_COUNT": str(self.base / "head-count"),
             "MOCK_HASH": HASH,
+            "MOCK_PARENT": PARENT,
+            "MOCK_RESET": str(self.base / "reset-head"),
             "MOCK_LOG": str(self.log),
             "PATH": f"{self.bin}:/usr/bin:/bin",
         })
@@ -197,7 +228,11 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout)
         marker = self.home / ".local/state/shelley-provision/success"
         self.assertIn(f"commit={HASH}", marker.read_text())
+        self.assertIn("source=source", marker.read_text())
         commands = self.commands()
+        self.assertIn(f"<{RELEASE}/shelley-linux-amd64-{HASH}.sha256>", commands)
+        self.assertIn(f"<{RELEASE}/shelley-linux-amd64-{PARENT}.sha256>", commands)
+        self.assertIn("Falling back to building", result.stdout)
         self.assertIn("git <clone> <--origin> <origin>", commands)
         self.assertIn("<https://github.com/swaroopch/shelley.git>", commands)
         self.assertIn("<https://github.int.exe.xyz/swaroopch/shelley.git>", commands)
@@ -217,6 +252,56 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(0, again.returncode, again.stdout)
         self.assertIn("already provisioned", again.stdout)
         self.assertEqual("", self.commands())
+
+    def assert_prebuilt_install(self, result, commit):
+        self.assertEqual(0, result.returncode, result.stdout)
+        marker = self.home / ".local/state/shelley-provision/success"
+        self.assertIn(f"commit={commit}", marker.read_text())
+        self.assertIn("source=prebuilt", marker.read_text())
+        self.assertIn("SHA-256 verified", result.stdout)
+        commands = self.commands()
+        for build_step in ("make <", "npm <", "pnpm <", "go <test>", "uvx <"):
+            self.assertNotIn(build_step, commands)
+        self.assertIn("git <clone> <--origin> <origin>", commands)
+        self.assertIn("<config> <--local> <user.email> <swaroop@swaroopch.com>", commands)
+        self.assertIn("sudo <-n> <mktemp> </usr/local/lib/shelley-backups/", commands)
+        self.assertIn("sudo <-n> <mv> <--> <", commands)
+        self.assertIn("sudo <-n> <systemctl> <try-restart> <shelley.service>", commands)
+        self.assertEqual([], list((self.home / ".local/state/shelley-provision").glob("prebuilt.*")))
+        return commands
+
+    def test_prebuilt_for_custom_head_skips_build(self):
+        result = self.run_script(PROVISION, "--first-boot", MOCK_PREBUILT="ok")
+        commands = self.assert_prebuilt_install(result, HASH)
+        self.assertNotIn("<reset>", commands)
+        self.assertNotIn(f"{PARENT}.sha256", commands)
+
+    def test_prebuilt_falls_back_to_previous_good_build(self):
+        result = self.run_script(
+            PROVISION, "--first-boot", MOCK_PREBUILT="ok", MOCK_PREBUILT_COMMIT=PARENT
+        )
+        commands = self.assert_prebuilt_install(result, PARENT)
+        self.assertIn(f"<reset> <--quiet> <--hard> <{PARENT}>", commands)
+
+    def test_prebuilt_checksum_mismatch_builds_from_source(self):
+        result = self.run_script(PROVISION, "--first-boot", MOCK_PREBUILT="bad")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("SHA-256 mismatch", result.stdout)
+        self.assertIn("Falling back to building", result.stdout)
+        commands = self.commands()
+        self.assertIn("<build-custom>", commands)
+        self.assertNotIn("<reset>", commands)
+        marker = self.home / ".local/state/shelley-provision/success"
+        self.assertIn(f"commit={HASH}", marker.read_text())
+        self.assertIn("source=source", marker.read_text())
+
+    def test_prebuilt_can_be_disabled(self):
+        result = self.run_script(
+            PROVISION, "--first-boot", MOCK_PREBUILT="ok", SHELLEY_PREBUILT=0
+        )
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertNotIn("/releases/download/", self.commands())
+        self.assertIn("<build-custom>", self.commands())
 
 
 if __name__ == "__main__":
