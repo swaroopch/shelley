@@ -45,3 +45,19 @@
     concrete value is genuinely unknowable; even then, spell it out if you can (e.g. `Default
     (on)` for a boolean toggle).
 17. All SQL queries use sqlc.
+
+## Shelley upgrades on sch-ed
+
+- For "check for new version", rebases, and the version dialog's upgrade flow,
+  summarize the highlights of the upstream changes being pulled in (what actually
+  changed, not just commit titles) and report what remains to finish the upgrade.
+  If there is no update or pending deployment, say so without offering unnecessary
+  work.
+- When steps remain, place the upstream highlights before ending by asking:
+  "Push fork custom, push fork main, install, restart?" Name only the pending
+  steps, and wait for approval unless the current request already authorizes them.
+- "Push fork custom" means `git push --force-with-lease fork custom`.
+- "Push fork main" means fast-forward local `main` to `origin/main` and run
+  `git push fork origin/main:refs/heads/main`. Do not push to upstream `origin`.
+- Follow the `customizing-shelley` skill to build, test, install, and restart.
+  After restarting, verify the live server's version.
